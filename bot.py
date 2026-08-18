@@ -1,7 +1,7 @@
 from flask import Flask, request
 import requests
 app = Flask(__name__)
-TOKEN = "8757780924:AAFs370CL1zMzY-fNCpqZ65-w0vymD0DH_E"
+TOKEN = "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74"
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
