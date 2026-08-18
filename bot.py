@@ -224,7 +224,7 @@ def send_telegram(text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {
-            "chat_id": "YOUR_CHAT_ID",  # Замени на свой ID
+            "chat_id": "228801334",
             "text": text,
             "parse_mode": "HTML"
         }
