@@ -21,7 +21,7 @@ LEAGUES = [39, 140, 78, 135, 61, 94, 88, 144, 203, 218, 179, 113, 84, 90, 197, 5
 CACHE_FILE = "cache.json"
 HISTORY_FILE = "history.json"
 
-# ===== ЗАГРУЗКА ИСТОРИИ =====
+# ===== ЗАГРУЗКА/СОХРАНЕНИЕ =====
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r") as f:
@@ -32,7 +32,6 @@ def save_history(history):
     with open(HISTORY_FILE, "w") as f:
         json.dump(history, f, indent=2)
 
-# ===== ЗАГРУЗКА КЕША =====
 def load_cache():
     if os.path.exists(CACHE_FILE):
         with open(CACHE_FILE, "r") as f:
@@ -49,9 +48,7 @@ def is_cache_fresh():
     if not cache:
         return False
     last_update = datetime.fromisoformat(cache.get("last_update", "2000-01-01T00:00:00"))
-    now = datetime.now()
-    # Кеш свежий 6 часов
-    return (now - last_update).total_seconds() < 21600
+    return (datetime.now() - last_update).total_seconds() < 21600
 
 # ===== РАСЧЁТ ВЕРОЯТНОСТЕЙ =====
 def poisson_prob(lam, k):
@@ -72,8 +69,95 @@ def calculate_probs(home_xg, away_xg):
         "away_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i <= j),
     }
 
+# ===== ПОЛУЧЕНИЕ ФОРМЫ =====
+def get_form(team_id):
+    try:
+        url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("response"):
+            wins = 0
+            for match in data["response"]:
+                if match["teams"]["home"]["id"] == team_id:
+                    if match["goals"]["home"] > match["goals"]["away"]:
+                        wins += 1
+                else:
+                    if match["goals"]["away"] > match["goals"]["home"]:
+                        wins += 1
+            return wins / 5
+    except:
+        pass
+    return 0.5
+
+# ===== ПОЛУЧЕНИЕ ТРАВМ =====
+def get_injuries(team_id):
+    try:
+        url = f"https://v3.football.api-sports.io/injuries?team={team_id}"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("response"):
+            injured_players = len(data["response"])
+            if injured_players >= 3:
+                return 0.85
+            elif injured_players >= 1:
+                return 0.93
+    except:
+        pass
+    return 1.0
+
+# ===== ПОЛУЧЕНИЕ МОТИВАЦИИ =====
+def get_motivation(team_id, league_id):
+    try:
+        url = f"https://v3.football.api-sports.io/standings?league={league_id}&season=2026"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("response"):
+            for league in data["response"]:
+                for standing in league["league"]["standings"]:
+                    for team in standing:
+                        if team["team"]["id"] == team_id:
+                            pos = team["rank"]
+                            total = len(standing)
+                            if pos <= 4 or pos >= total - 3:
+                                return 1.10
+                            else:
+                                return 1.0
+    except:
+        pass
+    return 1.0
+
+# ===== H2H (ЛИЧНЫЕ ВСТРЕЧИ) =====
+def get_h2h(home_id, away_id):
+    try:
+        url = f"https://v3.football.api-sports.io/fixtures/headtohead?h2h={home_id}-{away_id}&last=5"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("response"):
+            home_goals = []
+            away_goals = []
+            for match in data["response"]:
+                if match["teams"]["home"]["id"] == home_id:
+                    home_goals.append(match["goals"]["home"])
+                    away_goals.append(match["goals"]["away"])
+                else:
+                    home_goals.append(match["goals"]["away"])
+                    away_goals.append(match["goals"]["home"])
+            if home_goals:
+                return {
+                    "home_avg": sum(home_goals) / len(home_goals),
+                    "away_avg": sum(away_goals) / len(away_goals),
+                    "matches": len(home_goals),
+                }
+    except:
+        pass
+    return None
+
 # ===== ПОЛУЧЕНИЕ МАТЧЕЙ =====
-def get_matches():
+def get_matches_with_factors():
     all_matches = []
     for league_id in LEAGUES:
         try:
@@ -84,6 +168,26 @@ def get_matches():
             if data.get("response"):
                 for match in data["response"]:
                     if match["fixture"]["status"]["short"] == "NS":
+                        home_id = match["teams"]["home"]["id"]
+                        away_id = match["teams"]["away"]["id"]
+                        
+                        home_form = get_form(home_id)
+                        away_form = get_form(away_id)
+                        home_injuries = get_injuries(home_id)
+                        away_injuries = get_injuries(away_id)
+                        home_motivation = get_motivation(home_id, league_id)
+                        away_motivation = get_motivation(away_id, league_id)
+                        h2h = get_h2h(home_id, away_id)
+                        
+                        match["factors"] = {
+                            "home_form": home_form,
+                            "away_form": away_form,
+                            "home_injuries": home_injuries,
+                            "away_injuries": away_injuries,
+                            "home_motivation": home_motivation,
+                            "away_motivation": away_motivation,
+                            "h2h": h2h,
+                        }
                         all_matches.append(match)
         except:
             pass
@@ -98,6 +202,8 @@ def find_value_bets(matches, bank=1000):
             away = match["teams"]["away"]["name"]
             league = match["league"]["name"]
             fixture_id = match["fixture"]["id"]
+            factors = match.get("factors", {})
+            h2h = factors.get("h2h")
             
             stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
             headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
@@ -115,7 +221,28 @@ def find_value_bets(matches, bank=1000):
                         if item["type"] == "expected_goals":
                             away_xg = float(item["value"] or 1.3)
             
+            # Применяем факторы
+            home_xg *= factors.get("home_form", 0.5) + 0.5
+            away_xg *= factors.get("away_form", 0.5) + 0.5
+            home_xg *= factors.get("home_injuries", 1.0)
+            away_xg *= factors.get("away_injuries", 1.0)
+            home_xg *= factors.get("home_motivation", 1.0)
+            away_xg *= factors.get("away_motivation", 1.0)
+            
+            # H2H корректировка
+            if h2h and h2h.get("matches", 0) >= 3:
+                h2h_home = h2h["home_avg"]
+                h2h_away = h2h["away_avg"]
+                if h2h_home > 0 and h2h_away > 0:
+                    home_xg = (home_xg + h2h_home) / 2
+                    away_xg = (away_xg + h2h_away) / 2
+            
+            # Домашний стадион
+            home_xg *= 1.1
+            away_xg *= 0.95
+            
             probs = calculate_probs(home_xg, away_xg)
+            
             bet_types = [
                 ("btts", 1.9, "ОЗ - ДА"),
                 ("over_2_5", 1.85, "Тотал > 2.5"),
@@ -147,6 +274,17 @@ def find_value_bets(matches, bank=1000):
                         "stake": round(stake, 2),
                         "home_xg": round(home_xg, 2),
                         "away_xg": round(away_xg, 2),
+                        "factors": {
+                            "home_form": round(factors.get("home_form", 0.5), 2),
+                            "away_form": round(factors.get("away_form", 0.5), 2),
+                            "home_injuries": factors.get("home_injuries", 1.0),
+                            "away_injuries": factors.get("away_injuries", 1.0),
+                            "home_motivation": factors.get("home_motivation", 1.0),
+                            "away_motivation": factors.get("away_motivation", 1.0),
+                            "h2h_home": round(h2h["home_avg"], 2) if h2h else None,
+                            "h2h_away": round(h2h["away_avg"], 2) if h2h else None,
+                            "h2h_matches": h2h["matches"] if h2h else 0,
+                        }
                     })
         except:
             pass
@@ -181,20 +319,18 @@ def send_telegram(text):
     except:
         pass
 
-# ===== ФОН ОБНОВЛЕНИЕ КЕША (ПЛАНИРОВЩИК) =====
+# ===== ФОНОВОЕ ОБНОВЛЕНИЕ =====
 def scheduled_update():
     while True:
         now = datetime.now()
-        # Обновляем в 10:00 и 18:00
         if now.hour in [10, 18] and now.minute == 0:
             send_telegram("🔄 Плановое обновление кеша...")
-            matches = get_matches()
+            matches = get_matches_with_factors()
             bets = find_value_bets(matches)
             save_cache({"bets": bets})
             send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
         time.sleep(60)
 
-# Запускаем планировщик в отдельном потоке
 threading.Thread(target=scheduled_update, daemon=True).start()
 
 # ===== ВЕБХУК =====
@@ -226,7 +362,7 @@ def webhook():
         elif text == '/today':
             if not is_cache_fresh():
                 send_telegram("🔄 Обновляю кеш...")
-                matches = get_matches()
+                matches = get_matches_with_factors()
                 bets = find_value_bets(matches)
                 save_cache({"bets": bets})
             else:
@@ -236,6 +372,10 @@ def webhook():
             if bets:
                 for bet in bets:
                     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}"
+                    factors = bet.get("factors", {})
+                    h2h_info = ""
+                    if factors.get("h2h_matches", 0) >= 3:
+                        h2h_info = f"\n📋 H2H (посл. {factors['h2h_matches']}): {factors['h2h_home']} : {factors['h2h_away']} (в ср.)"
                     msg = f"""✅ <b>ВАЛУЙНАЯ СТАВКА!</b>
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
@@ -243,7 +383,17 @@ def webhook():
 💰 РАЗМЕР: {bet['stake']}$ (5% банка)
 📊 УВЕРЕННОСТЬ: {bet['prob']}%
 📈 EV: {bet['ev']}%
-📊 xG: {bet['home_xg']} : {bet['away_xg']}"""
+📊 xG: {bet['home_xg']} : {bet['away_xg']}
+
+📋 <b>ФАКТОРЫ:</b>
+🏠 Дома: +10% к xG
+📈 Форма хозяев: {factors.get('home_form', 0.5)*100:.0f}%
+📈 Форма гостей: {factors.get('away_form', 0.5)*100:.0f}%
+🏥 Травмы хозяев: {factors.get('home_injuries', 1.0)*100:.0f}%
+🏥 Травмы гостей: {factors.get('away_injuries', 1.0)*100:.0f}%
+🎯 Мотивация хозяев: {factors.get('home_motivation', 1.0)*100:.0f}%
+🎯 Мотивация гостей: {factors.get('away_motivation', 1.0)*100:.0f}%
+{h2h_info}"""
                     send_telegram_with_buttons(msg, bet_id)
             else:
                 send_telegram("❌ Сегодня валуйных ставок не найдено")
@@ -265,7 +415,7 @@ def webhook():
         
         elif text == '/update':
             send_telegram("🔄 Принудительное обновление кеша...")
-            matches = get_matches()
+            matches = get_matches_with_factors()
             bets = find_value_bets(matches)
             save_cache({"bets": bets})
             send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
