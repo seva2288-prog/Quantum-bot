@@ -3,7 +3,9 @@ import requests
 import math
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
+import threading
+import time
 
 app = Flask(__name__)
 
@@ -15,7 +17,7 @@ WEATHER_API_KEY = "7f0cfaed346b0fe364815ab65d627af2"
 # ===== ЛИГИ =====
 LEAGUES = [39, 140, 78, 135, 61, 94, 88, 144, 203, 218, 179, 113, 84, 90, 197, 52, 103, 111, 169, 213, 142, 123, 157, 223, 170, 73, 97]
 
-# ===== ФАЙЛЫ ДЛЯ ХРАНЕНИЯ =====
+# ===== ФАЙЛЫ =====
 CACHE_FILE = "cache.json"
 HISTORY_FILE = "history.json"
 
@@ -38,10 +40,20 @@ def load_cache():
     return None
 
 def save_cache(data):
+    data["last_update"] = datetime.now().isoformat()
     with open(CACHE_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-# ===== РАСЧЁТ ВЕРОЯТНОСТЕЙ (Пуассон) =====
+def is_cache_fresh():
+    cache = load_cache()
+    if not cache:
+        return False
+    last_update = datetime.fromisoformat(cache.get("last_update", "2000-01-01T00:00:00"))
+    now = datetime.now()
+    # Кеш свежий 6 часов
+    return (now - last_update).total_seconds() < 21600
+
+# ===== РАСЧЁТ ВЕРОЯТНОСТЕЙ =====
 def poisson_prob(lam, k):
     if lam == 0:
         return 1 if k == 0 else 0
@@ -60,7 +72,7 @@ def calculate_probs(home_xg, away_xg):
         "away_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i <= j),
     }
 
-# ===== ПОЛУЧЕНИЕ МАТЧЕЙ ИЗ API =====
+# ===== ПОЛУЧЕНИЕ МАТЧЕЙ =====
 def get_matches():
     all_matches = []
     for league_id in LEAGUES:
@@ -77,7 +89,7 @@ def get_matches():
             pass
     return all_matches
 
-# ===== ПОИСК ВАЛУЙНЫХ СТАВОК =====
+# ===== ПОИСК СТАВОК =====
 def find_value_bets(matches, bank=1000):
     bets = []
     for match in matches:
@@ -140,7 +152,7 @@ def find_value_bets(matches, bank=1000):
             pass
     return bets
 
-# ===== ОТПРАВКА В ТЕЛЕГРАМ С КНОПКАМИ =====
+# ===== ОТПРАВКА В ТЕЛЕГРАМ =====
 def send_telegram_with_buttons(text, bet_id):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -169,7 +181,23 @@ def send_telegram(text):
     except:
         pass
 
-# ===== ОБРАБОТКА КНОПОК =====
+# ===== ФОН ОБНОВЛЕНИЕ КЕША (ПЛАНИРОВЩИК) =====
+def scheduled_update():
+    while True:
+        now = datetime.now()
+        # Обновляем в 10:00 и 18:00
+        if now.hour in [10, 18] and now.minute == 0:
+            send_telegram("🔄 Плановое обновление кеша...")
+            matches = get_matches()
+            bets = find_value_bets(matches)
+            save_cache({"bets": bets})
+            send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
+        time.sleep(60)
+
+# Запускаем планировщик в отдельном потоке
+threading.Thread(target=scheduled_update, daemon=True).start()
+
+# ===== ВЕБХУК =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -191,20 +219,19 @@ def webhook():
     
     if data and 'message' in data:
         text = data['message'].get('text', '')
-        chat_id = data['message']['chat']['id']
         
         if text == '/start':
             send_telegram("🚀 Бот запущен! Напиши /today для поиска ставок")
         
         elif text == '/today':
-            cache = load_cache()
-            if cache and cache.get('date') == datetime.now().strftime("%Y-%m-%d"):
-                bets = cache['bets']
-            else:
+            if not is_cache_fresh():
                 send_telegram("🔄 Обновляю кеш...")
                 matches = get_matches()
                 bets = find_value_bets(matches)
-                save_cache({"date": datetime.now().strftime("%Y-%m-%d"), "bets": bets})
+                save_cache({"bets": bets})
+            else:
+                cache = load_cache()
+                bets = cache.get("bets", [])
             
             if bets:
                 for bet in bets:
@@ -236,6 +263,13 @@ def webhook():
 ❌ Проигрышей: {losses}
 🎯 Проходимость: {round(winrate, 1)}%""")
         
+        elif text == '/update':
+            send_telegram("🔄 Принудительное обновление кеша...")
+            matches = get_matches()
+            bets = find_value_bets(matches)
+            save_cache({"bets": bets})
+            send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
+        
         elif text == '/help':
             send_telegram("""📖 <b>Команды:</b>
 /today - ставки на сегодня
@@ -243,13 +277,6 @@ def webhook():
 /stats - статистика
 /update - обновить кеш
 /help - помощь""")
-        
-        elif text == '/update':
-            send_telegram("🔄 Обновляю кеш...")
-            matches = get_matches()
-            bets = find_value_bets(matches)
-            save_cache({"date": datetime.now().strftime("%Y-%m-%d"), "bets": bets})
-            send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
         
         else:
             send_telegram("Неизвестная команда. Напиши /help")
