@@ -18,13 +18,13 @@ WEATHER_API_KEY = "7f0cfaed346b0fe364815ab65d627af2"
 # ===== ЛИГИ =====
 LEAGUES = [39, 140, 78, 135, 61, 94, 88, 144, 203, 218, 179, 113, 84, 90, 197, 52, 103, 111, 169, 213, 142, 123, 157, 223, 170, 73, 97]
 
-# ===== НАСТРОЙКИ СЛОЁВ (можно менять) =====
+# ===== НАСТРОЙКИ СЛОЁВ =====
 SETTINGS = {
-    "improved_form": True,      # Улучшенная форма (учёт силы соперника)
-    "referee": True,            # Судья
-    "odds_movement": True,      # Движение коэффициентов
-    "psy_factor": True,         # PSY-фактор (психология)
-    "neural_learning": True,    # Нейросетевое обучение
+    "improved_form": True,
+    "referee": True,
+    "odds_movement": True,
+    "psy_factor": True,
+    "neural_learning": True,
 }
 
 # ===== ФАЙЛЫ =====
@@ -123,32 +123,24 @@ def calculate_probs(home_xg, away_xg):
         "away_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i <= j),
     }
 
-# ===== ДОПОЛНИТЕЛЬНЫЕ СЛОИ (с возможностью выключения) =====
-
-# ---- 1. УЛУЧШЕННАЯ ФОРМА (учёт силы соперника) ----
+# ===== ДОПОЛНИТЕЛЬНЫЕ СЛОИ =====
 def apply_improved_form(home_xg, away_xg, match):
     if not SETTINGS.get("improved_form", True):
         return home_xg, away_xg, []
-    
     reasons = []
-    # Получаем рейтинг соперников из таблицы
     home_rank = match.get("factors", {}).get("home_rank", 10)
     away_rank = match.get("factors", {}).get("away_rank", 10)
-    
     if home_rank < 5 and away_rank > 15:
         home_xg *= 1.05
         reasons.append("📈 Улучшенная форма: победа над сильным соперником (+5%)")
     elif home_rank > 15 and away_rank < 5:
         away_xg *= 1.05
         reasons.append("📈 Улучшенная форма: победа над сильным соперником (+5%)")
-    
     return home_xg, away_xg, reasons
 
-# ---- 2. СУДЬЯ ----
 def apply_referee(home_xg, away_xg, match):
     if not SETTINGS.get("referee", True):
         return home_xg, away_xg, []
-    
     reasons = []
     referee = match.get("factors", {}).get("referee")
     if referee:
@@ -161,111 +153,84 @@ def apply_referee(home_xg, away_xg, match):
                 break
     return home_xg, away_xg, reasons
 
-# ---- 3. ДВИЖЕНИЕ КОЭФФИЦИЕНТОВ ----
 def apply_odds_movement(home_xg, away_xg, fixture_id):
     if not SETTINGS.get("odds_movement", True):
         return home_xg, away_xg, []
-    
     reasons = []
     history = load_odds_history()
     key = str(fixture_id)
-    
     if key in history and len(history[key]) >= 2:
         first_odds = history[key][0].get("odds", 1.9)
         last_odds = history[key][-1].get("odds", 1.9)
         if first_odds - last_odds > 0.15:
             home_xg *= 0.95
             away_xg *= 0.95
-            reasons.append(f"📉 Кэф упал с {first_odds:.2f} до {last_odds:.2f} (-{first_odds-last_odds:.2f}) → снижение xG на 5%")
+            reasons.append(f"📉 Кэф упал с {first_odds:.2f} до {last_odds:.2f} → снижение xG на 5%")
         elif last_odds - first_odds > 0.15:
             home_xg *= 1.02
             away_xg *= 1.02
-            reasons.append(f"📈 Кэф вырос с {first_odds:.2f} до {last_odds:.2f} (+{last_odds-first_odds:.2f}) → повышение xG на 2%")
-    
+            reasons.append(f"📈 Кэф вырос с {first_odds:.2f} до {last_odds:.2f} → повышение xG на 2%")
     return home_xg, away_xg, reasons
 
-# ---- 4. PSY-ФАКТОР (психология) ----
 def apply_psy_factor(home_xg, away_xg, match):
     if not SETTINGS.get("psy_factor", True):
         return home_xg, away_xg, []
-    
     reasons = []
     fixture_name = match.get("fixture", {}).get("name", "").lower()
     league_name = match.get("league", {}).get("name", "").lower()
     home_form = match.get("factors", {}).get("home_form", {})
     away_form = match.get("factors", {}).get("away_form", {})
-    
     if "derby" in fixture_name or "derby" in league_name:
         home_xg *= 0.92
         away_xg *= 0.92
         reasons.append("🧠 Дерби: высокое давление (-8% к xG)")
-    
     if home_form.get("losses", 0) >= 3 and away_form.get("wins", 0) >= 3:
         home_xg *= 0.93
         away_xg *= 1.05
         reasons.append("🧠 Кризис vs подъём: хозяева в кризисе (-7%), гости на подъёме (+5%)")
-    
     return home_xg, away_xg, reasons
 
-# ---- 5. НЕЙРОСЕТЕВОЕ ОБУЧЕНИЕ (веса на основе истории) ----
 def apply_neural_learning(home_xg, away_xg, league):
     if not SETTINGS.get("neural_learning", True):
         return home_xg, away_xg, []
-    
     reasons = []
     weights = load_weights()
     league_weight = weights.get(league, {}).get("xg", 1.0)
-    
     if league_weight != 1.0:
         home_xg *= league_weight
         away_xg *= league_weight
-        reasons.append(f"🧠 Нейросеть: вес лиги {league_weight:.2f} (на основе истории)")
-    
+        reasons.append(f"🧠 Нейросеть: вес лиги {league_weight:.2f}")
     return home_xg, away_xg, reasons
 
-# ===== ОБНОВЛЕНИЕ КЭФОВ (для движения) =====
 def update_odds_history(fixture_id, current_odds):
     history = load_odds_history()
     key = str(fixture_id)
-    
     if key not in history:
         history[key] = []
-    
-    history[key].append({
-        "time": datetime.now().isoformat(),
-        "odds": current_odds
-    })
-    
+    history[key].append({"time": datetime.now().isoformat(), "odds": current_odds})
     if len(history[key]) > 10:
         history[key] = history[key][-10:]
-    
     save_odds_history(history)
 
-# ===== СУПЕР-СЛОЙ: БАЙЕС + ВСЕ СЛОИ (с настройками) =====
+# ===== СУПЕР-СЛОЙ =====
 def calculate_super_ik(match, raw_home_xg, raw_away_xg):
     reasons = []
-    
-    # ===== 1. БАЙЕСОВСКАЯ КОРРЕКЦИЯ (всегда) =====
     prior = load_prior()
     home_prior = prior.get("home", 1.5)
     away_prior = prior.get("away", 1.3)
     alpha = 10
-    
     home_xg = (raw_home_xg * 5 + home_prior * alpha) / (5 + alpha)
     away_xg = (raw_away_xg * 5 + away_prior * alpha) / (5 + alpha)
-    
     if raw_home_xg > home_prior * 1.5:
         reasons.append(f"📊 Байес: xG хозяев скорректирован с {raw_home_xg:.2f} до {home_xg:.2f}")
     if raw_away_xg > away_prior * 1.5:
         reasons.append(f"📊 Байес: xG гостей скорректирован с {raw_away_xg:.2f} до {away_xg:.2f}")
     
-    # ===== 2. БАЗОВЫЕ ФАКТОРЫ (всегда) =====
     factors = match.get("factors", {})
     home_form = factors.get("home_form", {})
     away_form = factors.get("away_form", {})
     h2h = factors.get("h2h")
     
-    # Форма
     home_ratio = home_form.get("ratio", 0.5)
     away_ratio = away_form.get("ratio", 0.5)
     if home_ratio < 0.4:
@@ -281,7 +246,6 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
         away_xg *= 1.05
         reasons.append("📈 Отличная форма гостей (+5%)")
     
-    # Травмы
     home_inj = factors.get("home_injuries", 1.0)
     away_inj = factors.get("away_injuries", 1.0)
     if home_inj < 0.9:
@@ -291,7 +255,6 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
         away_xg *= 0.93
         reasons.append("🏥 Травмы гостей (-7%)")
     
-    # Мотивация
     home_mot = factors.get("home_motivation", 1.0)
     away_mot = factors.get("away_motivation", 1.0)
     if home_mot > 1.05:
@@ -301,11 +264,9 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
         away_xg *= 1.05
         reasons.append("🎯 Мотивация гостей (+5%)")
     
-    # Домашний стадион
     home_xg *= 1.05
     reasons.append("🏠 Домашний стадион (+5%)")
     
-    # H2H
     if h2h and h2h.get("matches", 0) >= 3:
         home_wins = h2h.get("home_wins", 0)
         away_wins = h2h.get("away_wins", 0)
@@ -317,7 +278,6 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
             away_xg *= 1.05
             reasons.append("📊 Гости доминируют в личных встречах (+5%)")
     
-    # Неудобный соперник
     if h2h and h2h.get("matches", 0) >= 3:
         home_wins = h2h.get("home_wins", 0)
         away_wins = h2h.get("away_wins", 0)
@@ -329,7 +289,6 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
             away_xg *= 0.92
             reasons.append("⚠️ Гости неудобный соперник (-8%)")
     
-    # Экспертные правила
     fixture_name = match.get("fixture", {}).get("name", "").lower()
     league_name = match.get("league", {}).get("name", "").lower()
     if "derby" in fixture_name or "derby" in league_name:
@@ -344,7 +303,6 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
         away_xg *= 0.95
         reasons.append("📉 Гости проиграли 3 матча подряд (-5%)")
     
-    # Индивидуальный профиль игроков
     home_scorers = factors.get("home_scorers", [])
     away_scorers = factors.get("away_scorers", [])
     if home_scorers:
@@ -352,30 +310,24 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
     if away_scorers:
         reasons.append(f"⚽ Лучший бомбардир гостей: {away_scorers[0]['name']} ({away_scorers[0]['goals']} голов)")
     
-    # ===== 3. ДОПОЛНИТЕЛЬНЫЕ СЛОИ (опционально) =====
     home_xg, away_xg, add_reasons = apply_improved_form(home_xg, away_xg, match)
     reasons.extend(add_reasons)
-    
     home_xg, away_xg, add_reasons = apply_referee(home_xg, away_xg, match)
     reasons.extend(add_reasons)
-    
     fixture_id = match.get("fixture", {}).get("id")
     home_xg, away_xg, add_reasons = apply_odds_movement(home_xg, away_xg, fixture_id)
     reasons.extend(add_reasons)
-    
     home_xg, away_xg, add_reasons = apply_psy_factor(home_xg, away_xg, match)
     reasons.extend(add_reasons)
-    
     home_xg, away_xg, add_reasons = apply_neural_learning(home_xg, away_xg, league_name)
     reasons.extend(add_reasons)
     
-    # Обновляем историю кэфов
     if fixture_id:
         update_odds_history(fixture_id, 1.9)
     
     return home_xg, away_xg, reasons
 
-# ===== ПОЛУЧЕНИЕ ФОРМЫ =====
+# ===== ПОЛУЧЕНИЕ ДАННЫХ =====
 def get_form(team_id):
     try:
         url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
@@ -400,7 +352,6 @@ def get_form(team_id):
         pass
     return {"wins": 0, "losses": 0, "ratio": 0.5}
 
-# ===== ПОЛУЧЕНИЕ ТРАВМ =====
 def get_injuries(team_id):
     try:
         url = f"https://v3.football.api-sports.io/injuries?team={team_id}"
@@ -417,7 +368,6 @@ def get_injuries(team_id):
         pass
     return 1.0, []
 
-# ===== ПОЛУЧЕНИЕ МОТИВАЦИИ =====
 def get_motivation(team_id, league_id):
     try:
         url = f"https://v3.football.api-sports.io/standings?league={league_id}&season=2026"
@@ -441,7 +391,6 @@ def get_motivation(team_id, league_id):
         pass
     return 1.0, "неизвестно"
 
-# ===== H2H =====
 def get_h2h(home_id, away_id):
     try:
         url = f"https://v3.football.api-sports.io/fixtures/headtohead?h2h={home_id}-{away_id}&last=5"
@@ -478,7 +427,6 @@ def get_h2h(home_id, away_id):
         pass
     return None
 
-# ===== ПОЛУЧЕНИЕ СУДЬИ =====
 def get_referee_style(fixture_id):
     try:
         url = f"https://v3.football.api-sports.io/fixtures?id={fixture_id}"
@@ -493,7 +441,6 @@ def get_referee_style(fixture_id):
         pass
     return None
 
-# ===== ПОЛУЧЕНИЕ БОМБАРДИРОВ =====
 def get_top_scorers(team_id):
     try:
         url = f"https://v3.football.api-sports.io/players?team={team_id}&season=2026"
@@ -518,7 +465,6 @@ def get_top_scorers(team_id):
         pass
     return []
 
-# ===== ПОЛУЧЕНИЕ МАТЧЕЙ =====
 def get_matches_with_factors():
     all_matches = []
     for league_id in LEAGUES:
@@ -560,10 +506,11 @@ def get_matches_with_factors():
             pass
     return all_matches
 
-# ===== ПОИСК СТАВОК =====
-def find_value_bets(matches):
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ (ТОЛЬКО ОДНА) =====
+def find_best_bet(matches):
     bank = load_bank()
-    bets = []
+    best_bet = None
+    best_ev = -100
     
     for match in matches:
         try:
@@ -590,7 +537,6 @@ def find_value_bets(matches):
                             raw_away_xg = float(item["value"] or 1.3)
             
             home_xg, away_xg, ik_reasons = calculate_super_ik(match, raw_home_xg, raw_away_xg)
-            
             probs = calculate_probs(home_xg, away_xg)
             
             bet_types = [
@@ -607,11 +553,12 @@ def find_value_bets(matches):
                 if prob < 0.1 or prob > 0.99:
                     continue
                 ev = (prob * default_odds) - 1
-                if ev > 0.05:
+                if ev > best_ev:
+                    best_ev = ev
                     stake = bank * 0.05
                     if stake < 1:
                         stake = 1
-                    bets.append({
+                    best_bet = {
                         "home": home,
                         "away": away,
                         "league": league,
@@ -642,10 +589,13 @@ def find_value_bets(matches):
                             "home_scorers": factors.get("home_scorers", []),
                             "away_scorers": factors.get("away_scorers", []),
                         }
-                    })
+                    }
         except Exception as e:
             pass
-    return bets
+    
+    if best_bet and best_ev > 0.05:
+        return best_bet
+    return None
 
 # ===== ОБУЧЕНИЕ =====
 def train_model():
@@ -716,10 +666,10 @@ def scheduled_update():
         if now.hour in [10, 18] and now.minute == 0:
             send_telegram("🔄 Плановое обновление кеша...")
             matches = get_matches_with_factors()
-            bets = find_value_bets(matches)
-            save_cache({"bets": bets})
+            best = find_best_bet(matches)
+            save_cache({"best_bet": best})
             train_model()
-            send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
+            send_telegram(f"✅ Кеш обновлён! Лучшая ставка найдена." if best else "❌ Ставок не найдено")
         time.sleep(60)
 
 threading.Thread(target=scheduled_update, daemon=True).start()
@@ -753,53 +703,56 @@ def webhook():
             send_telegram("🚀 Бот запущен! Напиши /today для поиска ставок")
         
         elif text == '/today':
-            if not is_cache_fresh():
+            cache = load_cache()
+            if cache and cache.get("best_bet"):
+                bet = cache["best_bet"]
+            else:
                 send_telegram("🔄 Обновляю кеш...")
                 matches = get_matches_with_factors()
-                bets = find_value_bets(matches)
-                save_cache({"bets": bets})
+                bet = find_best_bet(matches)
+                save_cache({"best_bet": bet})
                 train_model()
-            else:
-                cache = load_cache()
-                bets = cache.get("bets", [])
             
-            if bets:
-                for bet in bets:
-                    bet_id = f"{bet['fixture_id']}_{bet['bet_type']}"
-                    factors = bet.get("factors", {})
-                    ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
-                    
-                    injuries_info = ""
-                    if factors.get("home_injuries_list"):
-                        injuries_info += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
-                    if factors.get("away_injuries_list"):
-                        injuries_info += f"\n🏥 Травмы гостей: {', '.join(factors['away_injuries_list'][:3])}"
-                    
-                    scorers_info = ""
-                    if factors.get("home_scorers"):
-                        scorers_info += f"\n⚽ Лучшие бомбардиры хозяев: {', '.join([s['name'] for s in factors['home_scorers'][:3]])}"
-                    if factors.get("away_scorers"):
-                        scorers_info += f"\n⚽ Лучшие бомбардиры гостей: {', '.join([s['name'] for s in factors['away_scorers'][:3]])}"
-                    
-                    settings_status = f"""
+            if bet:
+                factors = bet.get("factors", {})
+                ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+                
+                injuries_info = ""
+                if factors.get("home_injuries_list"):
+                    injuries_info += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
+                if factors.get("away_injuries_list"):
+                    injuries_info += f"\n🏥 Травмы гостей: {', '.join(factors['away_injuries_list'][:3])}"
+                
+                scorers_info = ""
+                if factors.get("home_scorers"):
+                    scorers_info += f"\n⚽ Лучший бомбардир хозяев: {factors['home_scorers'][0]['name']} ({factors['home_scorers'][0]['goals']} голов)"
+                if factors.get("away_scorers"):
+                    scorers_info += f"\n⚽ Лучший бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
+                
+                settings_status = f"""
 ⚙️ <b>Активные слои:</b>
 • Улучшенная форма: {'✅' if SETTINGS['improved_form'] else '❌'}
 • Судья: {'✅' if SETTINGS['referee'] else '❌'}
 • Движение кэфов: {'✅' if SETTINGS['odds_movement'] else '❌'}
 • PSY-фактор: {'✅' if SETTINGS['psy_factor'] else '❌'}
 • Нейросетевое обучение: {'✅' if SETTINGS['neural_learning'] else '❌'}"""
-                    
-                    msg = f"""✅ <b>ВАЛУЙНАЯ СТАВКА!</b>
+                
+                bet_id = f"{bet['fixture_id']}_{bet['bet_type']}"
+                msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ (ЛУЧШАЯ СТАВКА)</b>
+
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
-🎯 {bet['bet']} | КЭФ: {bet['odds']}
+
+🎯 <b>{bet['bet']}</b>
+📈 КЭФ: {bet['odds']}
 💰 РАЗМЕР: {bet['stake']}$ (5% банка)
 📊 УВЕРЕННОСТЬ: {bet['prob']}%
-📈 EV: {bet['ev']}%
+📈 EV: <b>{bet['ev']}%</b> ← САМЫЙ ВЫСОКИЙ!
+
 📊 xG: {bet['home_xg']} : {bet['away_xg']} (сырые: {bet['raw_home_xg']} : {bet['raw_away_xg']})
 👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
 
-📋 <b>ФАКТОРЫ:</b>
+📋 <b>КЛЮЧЕВЫЕ ФАКТОРЫ:</b>
 📈 Форма хозяев: {factors.get('home_form', 0.5)*100:.0f}%
 📈 Форма гостей: {factors.get('away_form', 0.5)*100:.0f}%
 🎯 Мотивация хозяев: {factors.get('home_motivation', 1.0)*100:.0f}% ({factors.get('home_motivation_text', '')})
@@ -809,9 +762,8 @@ def webhook():
 
 🧠 <b>СУПЕР-СЛОЙ (Байес + IK):</b>
 {ik_reasons}
-
 {settings_status}"""
-                    send_telegram_with_buttons(msg, bet_id)
+                send_telegram_with_buttons(msg, bet_id)
             else:
                 send_telegram("❌ Сегодня валуйных ставок не найдено")
         
@@ -834,10 +786,10 @@ def webhook():
         elif text == '/update':
             send_telegram("🔄 Принудительное обновление кеша...")
             matches = get_matches_with_factors()
-            bets = find_value_bets(matches)
-            save_cache({"bets": bets})
+            bet = find_best_bet(matches)
+            save_cache({"best_bet": bet})
             train_model()
-            send_telegram(f"✅ Кеш обновлён! Найдено ставок: {len(bets)}")
+            send_telegram("✅ Кеш обновлён!" if bet else "❌ Ставок не найдено")
         
         elif text.startswith('/setbank'):
             try:
@@ -878,7 +830,7 @@ PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
         
         elif text == '/help':
             send_telegram("""📖 <b>Команды:</b>
-/today - ставки на сегодня
+/today - ЛУЧШАЯ ставка на сегодня
 /bank - текущий банк
 /stats - статистика
 /update - обновить кеш
