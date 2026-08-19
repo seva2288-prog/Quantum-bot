@@ -677,7 +677,7 @@ class OddsMonitor:
         return None
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 8. УВЕДОМЛЕНИЯ О СОБЫТИЯХ
+# 8. УВЕДОМЛЕНИЯ О СОБЫТИЯХ (ОБНОВЛЕНО)
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 class EventNotifier:
@@ -994,26 +994,90 @@ def send_telegram(text):
         pass
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ФОНОВОЕ ОБНОВЛЕНИЕ
+# ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ (ДОБАВЛЕНО)
+# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
+
+last_notified_bets = {}
+
+def send_bet_notification(bet):
+    """Отправляет уведомление о новой валуйной ставке"""
+    global last_notified_bets
+    
+    if not bet:
+        return
+    
+    key = f"{bet['fixture_id']}_{bet['bet_type']}"
+    if key in last_notified_bets and last_notified_bets[key] == bet['ev']:
+        return
+    
+    last_notified_bets[key] = bet['ev']
+    
+    factors = bet.get("factors", {})
+    ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+    
+    injuries_info = ""
+    if factors.get("home_injuries_list"):
+        injuries_info += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
+    if factors.get("away_injuries_list"):
+        injuries_info += f"\n🏥 Травмы гостей: {', '.join(factors['away_injuries_list'][:3])}"
+    
+    scorers_info = ""
+    if factors.get("home_scorers"):
+        scorers_info += f"\n⚽ Бомбардир хозяев: {factors['home_scorers'][0]['name']} ({factors['home_scorers'][0]['goals']} голов)"
+    if factors.get("away_scorers"):
+        scorers_info += f"\n⚽ Бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
+    
+    bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
+    msg = f"""🔥 <b>НОВАЯ ВАЛУЙНАЯ СТАВКА!</b>
+
+🏟️ {bet['home']} vs {bet['away']}
+🏆 {bet['league']}
+
+🎯 <b>{bet['bet']}</b>
+📈 КЭФ: {bet['odds']}
+💰 РАЗМЕР: ${bet['stake']:.2f}
+📊 УВЕРЕННОСТЬ: {bet['prob']}%
+📈 EV: <b>{bet['ev']}%</b>
+
+📊 xG: {bet['home_xg']} : {bet['away_xg']}
+👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
+
+📋 <b>ФАКТОРЫ:</b>
+📈 Форма хозяев: {factors.get('home_form', 0.5)*100:.0f}%
+📈 Форма гостей: {factors.get('away_form', 0.5)*100:.0f}%
+{injuries_info}
+{scorers_info}
+
+🧠 <b>СУПЕР-СЛОЙ:</b>
+{ik_reasons}"""
+    send_telegram_with_buttons(msg, bet_id)
+
+# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
+# ФОНОВОЕ ОБНОВЛЕНИЕ (ОБНОВЛЕНО - КАЖДЫЙ ЧАС)
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 def scheduled_update():
     while True:
         try:
             now = datetime.now()
-            if now.hour in [10, 18] and now.minute == 0:
-                logger.info("🔄 Scheduled update...")
+            # Проверяем каждый час (когда минуты = 0)
+            if now.minute == 0:
+                logger.info(f"🔄 Hourly update at {now.strftime('%H:%M')}...")
                 matches = get_matches_with_factors()
-                best = find_best_bet(matches)
-                save_cache({"best_bet": best})
+                bet = find_best_bet(matches)
+                save_cache({"best_bet": bet})
                 train_model()
                 
-                if best:
-                    send_telegram(f"✅ Кеш обновлён! {best['home']} vs {best['away']}")
+                if bet:
+                    # Отправляем уведомление о новой ставке
+                    send_bet_notification(bet)
+                    logger.info(f"✅ Найдена ставка: {bet['home']} vs {bet['away']} | EV: {bet['ev']}%")
                 else:
-                    send_telegram("❌ Ставок не найдено")
+                    logger.info("❌ Ставок не найдено")
+            
             time.sleep(60)
-        except:
+        except Exception as e:
+            logger.error(f"Scheduled update error: {e}")
             time.sleep(300)
 
 # Запускаем фоновые сервисы
