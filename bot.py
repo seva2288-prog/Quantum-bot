@@ -15,8 +15,37 @@ TELEGRAM_TOKEN = "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74"
 FOOTBALL_API_KEY = "3e01a7f37589da560393ad459bfd61ff"
 WEATHER_API_KEY = "7f0cfaed346b0fe364815ab65d627af2"
 
-# ===== ЛИГИ =====
-LEAGUES = [39, 140, 78, 135, 61, 94, 88, 144, 203, 218, 179, 113, 84, 90, 197, 52, 103, 111, 169, 213, 142, 123, 157, 223, 170, 73, 97]
+# ===== ВСЕ ЛИГИ (РАСШИРЕННЫЙ СПИСОК) =====
+LEAGUES = [
+    # ⭐ ТОП-5
+    39, 140, 78, 135, 61,
+    # 📊 ВТОРЫЕ ДИВИЗИОНЫ
+    40, 141, 79, 136, 62,
+    # 🏆 ЕВРОКУБКИ
+    2, 3, 848,
+    # 🇪🇺 ЗАПАДНАЯ ЕВРОПА
+    88, 89, 94, 203, 197, 345, 106, 207,
+    # 🇷🇺 ВОСТОЧНАЯ ЕВРОПА
+    90, 242, 272, 276, 283, 288, 253, 289, 290, 291,
+    # ❄️ СЕВЕРНАЯ ЕВРОПА
+    179, 218, 240,
+    # 🏆 КУБКИ
+    1, 12, 45, 46, 47, 48, 50
+]
+
+# ===== НАЗВАНИЯ ЛИГ =====
+LEAGUE_NAMES = {
+    39: "АПЛ", 140: "Ла Лига", 78: "Бундеслига", 135: "Серия А", 61: "Лига 1",
+    40: "Чемпионшип", 141: "Ла Лига 2", 79: "2. Бундеслига", 136: "Серия В", 62: "Лига 2",
+    2: "ЛЧ", 3: "ЛЕ", 848: "ЛК",
+    88: "Эредивизи", 89: "Про Лига", 94: "Примейра", 203: "Греция", 197: "Турция",
+    345: "Швейцария", 106: "Австрия", 207: "Шотландия",
+    90: "РПЛ", 242: "Чехия", 272: "Польша", 276: "Украина", 283: "Хорватия",
+    288: "Сербия", 253: "Румыния", 289: "Болгария", 290: "Словакия", 291: "Словения",
+    179: "Дания", 218: "Норвегия", 240: "Швеция",
+    1: "Кубок мира", 12: "Кубок Англии", 45: "Кубок Испании",
+    46: "Кубок Германии", 47: "Кубок Италии", 48: "Кубок Франции", 50: "Кубок Лиги"
+}
 
 # ===== НАСТРОЙКИ СЛОЁВ =====
 SETTINGS = {
@@ -34,8 +63,19 @@ WEIGHTS_FILE = "weights.json"
 BANK_FILE = "bank.json"
 ODDS_HISTORY_FILE = "odds_history.json"
 PRIOR_FILE = "prior.json"
+LEAGUES_FILE = "leagues.json"
 
 # ===== ЗАГРУЗКА/СОХРАНЕНИЕ =====
+def load_leagues():
+    if os.path.exists(LEAGUES_FILE):
+        with open(LEAGUES_FILE, "r") as f:
+            return json.load(f)
+    return LEAGUES
+
+def save_leagues(leagues):
+    with open(LEAGUES_FILE, "w") as f:
+        json.dump(leagues, f, indent=2)
+
 def load_history():
     if os.path.exists(HISTORY_FILE):
         with open(HISTORY_FILE, "r") as f:
@@ -465,11 +505,14 @@ def get_top_scorers(team_id):
         pass
     return []
 
-def get_matches_with_factors():
+def get_matches_with_factors(date=None):
+    if date is None:
+        date = datetime.now().strftime('%Y-%m-%d')
     all_matches = []
-    for league_id in LEAGUES:
+    leagues = load_leagues()
+    for league_id in leagues:
         try:
-            url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season=2026&date={datetime.now().strftime('%Y-%m-%d')}"
+            url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season=2026&date={date}"
             headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
             resp = requests.get(url, headers=headers, timeout=15)
             data = resp.json()
@@ -506,7 +549,7 @@ def get_matches_with_factors():
             pass
     return all_matches
 
-# ===== ПОИСК ЛУЧШЕЙ СТАВКИ (ТОЛЬКО ОДНА) =====
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
 def find_best_bet(matches):
     bank = load_bank()
     best_bet = None
@@ -517,6 +560,7 @@ def find_best_bet(matches):
             home = match["teams"]["home"]["name"]
             away = match["teams"]["away"]["name"]
             league = match["league"]["name"]
+            league_id = match["league"]["id"]
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
             
@@ -562,6 +606,7 @@ def find_best_bet(matches):
                         "home": home,
                         "away": away,
                         "league": league,
+                        "league_id": league_id,
                         "fixture_id": fixture_id,
                         "bet": label,
                         "bet_type": bet_type,
@@ -698,6 +743,7 @@ def webhook():
     
     if data and 'message' in data:
         text = data['message'].get('text', '')
+        chat_id = data['message']['chat']['id']
         
         if text == '/start':
             send_telegram("🚀 Бот запущен! Напиши /today для поиска ставок")
@@ -767,6 +813,113 @@ def webhook():
             else:
                 send_telegram("❌ Сегодня валуйных ставок не найдено")
         
+        elif text == '/tomorrow':
+            tomorrow = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
+            send_telegram(f"🔄 Поиск матчей на {tomorrow}...")
+            matches = get_matches_with_factors(tomorrow)
+            bet = find_best_bet(matches)
+            save_cache({"best_bet": bet})
+            train_model()
+            if bet:
+                factors = bet.get("factors", {})
+                ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+                
+                msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ НА ЗАВТРА</b>
+
+🏟️ {bet['home']} vs {bet['away']}
+🏆 {bet['league']}
+
+🎯 <b>{bet['bet']}</b>
+📈 КЭФ: {bet['odds']}
+💰 РАЗМЕР: {bet['stake']}$ (5% банка)
+📊 УВЕРЕННОСТЬ: {bet['prob']}%
+📈 EV: <b>{bet['ev']}%</b>
+
+📊 xG: {bet['home_xg']} : {bet['away_xg']}
+
+🧠 <b>СУПЕР-СЛОЙ:</b>
+{ik_reasons}"""
+                send_telegram_with_buttons(msg, f"{bet['fixture_id']}_{bet['bet_type']}")
+            else:
+                send_telegram(f"❌ На {tomorrow} валуйных ставок не найдено")
+        
+        elif text == '/matches':
+            matches = get_matches_with_factors()
+            if matches:
+                leagues_found = set()
+                for m in matches:
+                    leagues_found.add(m.get("league", {}).get("name", "Неизвестно"))
+                msg = f"✅ Найдено {len(matches)} матчей на сегодня\n\n"
+                for league in sorted(leagues_found):
+                    count = sum(1 for m in matches if m.get("league", {}).get("name") == league)
+                    msg += f"• {league}: {count} матчей\n"
+                send_telegram(msg)
+            else:
+                send_telegram("❌ Матчей на сегодня не найдено")
+        
+        elif text == '/leagues':
+            leagues = load_leagues()
+            msg = "📋 <b>СПИСОК ЛИГ:</b>\n\n"
+            for lid in leagues:
+                name = LEAGUE_NAMES.get(lid, f"Лига {lid}")
+                msg += f"• {name} (ID: {lid})\n"
+            send_telegram(msg)
+        
+        elif text.startswith('/add_league'):
+            try:
+                lid = int(text.split()[1])
+                leagues = load_leagues()
+                if lid not in leagues:
+                    leagues.append(lid)
+                    save_leagues(leagues)
+                    send_telegram(f"✅ Лига {lid} добавлена!")
+                else:
+                    send_telegram(f"ℹ️ Лига {lid} уже есть в списке")
+            except:
+                send_telegram("❌ Используйте: /add_league ID")
+        
+        elif text.startswith('/remove_league'):
+            try:
+                lid = int(text.split()[1])
+                leagues = load_leagues()
+                if lid in leagues:
+                    leagues.remove(lid)
+                    save_leagues(leagues)
+                    send_telegram(f"✅ Лига {lid} удалена!")
+                else:
+                    send_telegram(f"ℹ️ Лига {lid} не найдена в списке")
+            except:
+                send_telegram("❌ Используйте: /remove_league ID")
+        
+        elif text.startswith('/today_league'):
+            try:
+                lid = int(text.split()[1])
+                matches = get_matches_with_factors()
+                matches = [m for m in matches if m.get("league", {}).get("id") == lid]
+                if matches:
+                    bet = find_best_bet(matches)
+                    if bet:
+                        factors = bet.get("factors", {})
+                        ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+                        
+                        msg = f"""🔥 <b>ЛУЧШАЯ СТАВКА В ЛИГЕ</b>
+
+🏟️ {bet['home']} vs {bet['away']}
+🏆 {bet['league']}
+
+🎯 <b>{bet['bet']}</b>
+📈 КЭФ: {bet['odds']}
+💰 РАЗМЕР: {bet['stake']}$ (5% банка)
+📊 УВЕРЕННОСТЬ: {bet['prob']}%
+📈 EV: <b>{bet['ev']}%</b>"""
+                        send_telegram_with_buttons(msg, f"{bet['fixture_id']}_{bet['bet_type']}")
+                    else:
+                        send_telegram(f"❌ В лиге {lid} нет валуйных ставок")
+                else:
+                    send_telegram(f"❌ В лиге {lid} нет матчей сегодня")
+            except:
+                send_telegram("❌ Используйте: /today_league ID")
+        
         elif text == '/bank':
             bank = load_bank()
             send_telegram(f"💰 Текущий банк: ${bank}")
@@ -829,15 +982,21 @@ PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
                 send_telegram("❌ Используйте: /toggle 1")
         
         elif text == '/help':
-            send_telegram("""📖 <b>Команды:</b>
+            send_telegram("""📖 <b>КОМАНДЫ:</b>
 /today - ЛУЧШАЯ ставка на сегодня
-/bank - текущий банк
-/stats - статистика
-/update - обновить кеш
-/setbank 1500 - установить банк
-/settings - настройки слоёв
-/toggle 1 - включить/выключить слой
-/help - помощь""")
+/tomorrow - ЛУЧШАЯ ставка на завтра
+/matches - Показать матчи на сегодня
+/leagues - Список всех лиг
+/add_league ID - Добавить лигу
+/remove_league ID - Удалить лигу
+/today_league ID - Лучшая ставка в лиге
+/bank - Текущий банк
+/stats - Статистика
+/update - Обновить кеш
+/setbank 1500 - Установить банк
+/settings - Настройки слоёв
+/toggle 1 - Включить/выключить слой
+/help - Помощь""")
         
         else:
             send_telegram("Неизвестная команда. Напиши /help")
