@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import threading
 import time
 import re
+import concurrent.futures
 
 app = Flask(__name__)
 
@@ -15,25 +16,14 @@ TELEGRAM_TOKEN = "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74"
 FOOTBALL_API_KEY = "3e01a7f37589da560393ad459bfd61ff"
 WEATHER_API_KEY = "7f0cfaed346b0fe364815ab65d627af2"
 
-# ===== ВСЕ ЛИГИ (РАСШИРЕННЫЙ СПИСОК) =====
+# ===== ВСЕ ЛИГИ =====
 LEAGUES = [
-    # ⭐ ТОП-5
-    39, 140, 78, 135, 61,
-    # 📊 ВТОРЫЕ ДИВИЗИОНЫ
-    40, 141, 79, 136, 62,
-    # 🏆 ЕВРОКУБКИ
-    2, 3, 848,
-    # 🇪🇺 ЗАПАДНАЯ ЕВРОПА
-    88, 89, 94, 203, 197, 345, 106, 207,
-    # 🇷🇺 ВОСТОЧНАЯ ЕВРОПА
-    90, 242, 272, 276, 283, 288, 253, 289, 290, 291,
-    # ❄️ СЕВЕРНАЯ ЕВРОПА
-    179, 218, 240,
-    # 🏆 КУБКИ
-    1, 12, 45, 46, 47, 48, 50
+    39, 140, 78, 135, 61, 40, 141, 79, 136, 62,
+    2, 3, 848, 88, 89, 94, 203, 197, 345, 106,
+    207, 90, 242, 272, 276, 283, 288, 253, 289,
+    290, 291, 179, 218, 240, 1, 12, 45, 46, 47, 48, 50
 ]
 
-# ===== НАЗВАНИЯ ЛИГ =====
 LEAGUE_NAMES = {
     39: "АПЛ", 140: "Ла Лига", 78: "Бундеслига", 135: "Серия А", 61: "Лига 1",
     40: "Чемпионшип", 141: "Ла Лига 2", 79: "2. Бундеслига", 136: "Серия В", 62: "Лига 2",
@@ -47,7 +37,6 @@ LEAGUE_NAMES = {
     46: "Кубок Германии", 47: "Кубок Италии", 48: "Кубок Франции", 50: "Кубок Лиги"
 }
 
-# ===== НАСТРОЙКИ СЛОЁВ =====
 SETTINGS = {
     "improved_form": True,
     "referee": True,
@@ -56,7 +45,8 @@ SETTINGS = {
     "neural_learning": True,
 }
 
-# ===== ФАЙЛЫ =====
+last_notified_bets = {}
+
 CACHE_FILE = "cache.json"
 HISTORY_FILE = "history.json"
 WEIGHTS_FILE = "weights.json"
@@ -65,7 +55,6 @@ ODDS_HISTORY_FILE = "odds_history.json"
 PRIOR_FILE = "prior.json"
 LEAGUES_FILE = "leagues.json"
 
-# ===== ЗАГРУЗКА/СОХРАНЕНИЕ =====
 def load_leagues():
     if os.path.exists(LEAGUES_FILE):
         with open(LEAGUES_FILE, "r") as f:
@@ -137,14 +126,6 @@ def save_prior(prior):
     with open(PRIOR_FILE, "w") as f:
         json.dump(prior, f, indent=2)
 
-def is_cache_fresh():
-    cache = load_cache()
-    if not cache:
-        return False
-    last_update = datetime.fromisoformat(cache.get("last_update", "2000-01-01T00:00:00"))
-    return (datetime.now() - last_update).total_seconds() < 21600
-
-# ===== РАСЧЁТ ВЕРОЯТНОСТЕЙ (Пуассон) =====
 def poisson_prob(lam, k):
     if lam == 0:
         return 1 if k == 0 else 0
@@ -164,211 +145,93 @@ def calculate_probs(home_xg, away_xg):
         "away_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i <= j),
     }
 
-# ===== ДОПОЛНИТЕЛЬНЫЕ СЛОИ =====
-def apply_improved_form(home_xg, away_xg, match):
-    if not SETTINGS.get("improved_form", True):
-        return home_xg, away_xg, []
-    reasons = []
-    home_rank = match.get("factors", {}).get("home_rank", 10)
-    away_rank = match.get("factors", {}).get("away_rank", 10)
-    if home_rank < 5 and away_rank > 15:
-        home_xg *= 1.05
-        reasons.append("📈 Улучшенная форма: победа над сильным соперником (+5%)")
-    elif home_rank > 15 and away_rank < 5:
-        away_xg *= 1.05
-        reasons.append("📈 Улучшенная форма: победа над сильным соперником (+5%)")
-    return home_xg, away_xg, reasons
+# ===== ПОЛУЧЕНИЕ КООРДИНАТ СТАДИОНА ЧЕРЕЗ API =====
+def get_stadium_coords_from_api(team_name):
+    """Получает координаты стадиона через API по названию команды"""
+    try:
+        url = f"https://v3.football.api-sports.io/teams?search={team_name}"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=5)
+        data = resp.json()
+        
+        if data.get("response") and len(data["response"]) > 0:
+            venue = data["response"][0].get("venue")
+            if venue and venue.get("latitude") and venue.get("longitude"):
+                return {
+                    "lat": float(venue["latitude"]),
+                    "lon": float(venue["longitude"]),
+                    "name": venue.get("name", "Unknown"),
+                    "city": venue.get("city", "Unknown")
+                }
+    except:
+        pass
+    return None
 
-def apply_referee(home_xg, away_xg, match):
-    if not SETTINGS.get("referee", True):
-        return home_xg, away_xg, []
-    reasons = []
-    referee = match.get("factors", {}).get("referee")
-    if referee:
-        strict_referees = ["маттеу", "клос", "лаос", "олсен"]
-        for strict in strict_referees:
-            if strict in referee.lower():
-                home_xg *= 0.95
-                away_xg *= 0.95
-                reasons.append(f"👨‍⚖️ Строгий судья: {referee} (-5% к тоталу)")
-                break
-    return home_xg, away_xg, reasons
+# ===== ПОЛУЧЕНИЕ ПОГОДЫ =====
+def get_weather(lat, lon):
+    """Получает погоду по координатам через OpenWeatherMap"""
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&units=metric&appid={WEATHER_API_KEY}"
+        resp = requests.get(url, timeout=5)
+        data = resp.json()
+        if data.get("main"):
+            return {
+                "temp": data["main"]["temp"],
+                "feels_like": data["main"]["feels_like"],
+                "humidity": data["main"]["humidity"],
+                "condition": data["weather"][0]["main"],
+                "description": data["weather"][0]["description"],
+                "wind": data["wind"]["speed"],
+                "icon": data["weather"][0]["icon"]
+            }
+    except:
+        pass
+    return None
 
-def apply_odds_movement(home_xg, away_xg, fixture_id):
-    if not SETTINGS.get("odds_movement", True):
-        return home_xg, away_xg, []
-    reasons = []
-    history = load_odds_history()
-    key = str(fixture_id)
-    if key in history and len(history[key]) >= 2:
-        first_odds = history[key][0].get("odds", 1.9)
-        last_odds = history[key][-1].get("odds", 1.9)
-        if first_odds - last_odds > 0.15:
-            home_xg *= 0.95
-            away_xg *= 0.95
-            reasons.append(f"📉 Кэф упал с {first_odds:.2f} до {last_odds:.2f} → снижение xG на 5%")
-        elif last_odds - first_odds > 0.15:
-            home_xg *= 1.02
-            away_xg *= 1.02
-            reasons.append(f"📈 Кэф вырос с {first_odds:.2f} до {last_odds:.2f} → повышение xG на 2%")
-    return home_xg, away_xg, reasons
+def get_weather_impact(weather):
+    """Рассчитывает влияние погоды на xG"""
+    if not weather:
+        return 0, "🌤️ Нет данных о погоде"
+    
+    temp = weather["temp"]
+    condition = weather["condition"]
+    wind = weather["wind"]
+    
+    impact = 0
+    reason = "🌤️ Погода нейтральна"
+    
+    if condition == "Rain" or condition == "Drizzle":
+        impact = -15
+        reason = "🌧️ Дождь снижает результативность (-15% голов)"
+    elif condition == "Snow":
+        impact = -25
+        reason = "❄️ Снег сильно влияет на игру (-25% голов)"
+    elif condition == "Thunderstorm":
+        impact = -30
+        reason = "⛈️ Гроза! Очень низкая результативность (-30% голов)"
+    elif temp > 30:
+        impact = -20
+        reason = f"🌡️ Жара ({temp}°C) снижает темп игры (-20% голов)"
+    elif temp < 0:
+        impact = -10
+        reason = f"🥶 Холод ({temp}°C) влияет на качество игры (-10% голов)"
+    elif wind > 20:
+        impact = -10
+        reason = f"💨 Сильный ветер ({wind} км/ч) влияет на точность (-10% голов)"
+    elif condition == "Clear" and 15 <= temp <= 25:
+        impact = 5
+        reason = f"☀️ Отличная погода для футбола ({temp}°C, +5% голов)"
+    elif condition == "Clouds":
+        reason = f"☁️ Облачно, {temp}°C, условия нормальные"
+    elif condition == "Mist" or condition == "Fog":
+        impact = -5
+        reason = "🌫️ Туман снижает видимость (-5% голов)"
+    elif condition == "Clear":
+        reason = f"☀️ Ясно, {temp}°C, условия нормальные"
+    
+    return impact, reason
 
-def apply_psy_factor(home_xg, away_xg, match):
-    if not SETTINGS.get("psy_factor", True):
-        return home_xg, away_xg, []
-    reasons = []
-    fixture_name = match.get("fixture", {}).get("name", "").lower()
-    league_name = match.get("league", {}).get("name", "").lower()
-    home_form = match.get("factors", {}).get("home_form", {})
-    away_form = match.get("factors", {}).get("away_form", {})
-    if "derby" in fixture_name or "derby" in league_name:
-        home_xg *= 0.92
-        away_xg *= 0.92
-        reasons.append("🧠 Дерби: высокое давление (-8% к xG)")
-    if home_form.get("losses", 0) >= 3 and away_form.get("wins", 0) >= 3:
-        home_xg *= 0.93
-        away_xg *= 1.05
-        reasons.append("🧠 Кризис vs подъём: хозяева в кризисе (-7%), гости на подъёме (+5%)")
-    return home_xg, away_xg, reasons
-
-def apply_neural_learning(home_xg, away_xg, league):
-    if not SETTINGS.get("neural_learning", True):
-        return home_xg, away_xg, []
-    reasons = []
-    weights = load_weights()
-    league_weight = weights.get(league, {}).get("xg", 1.0)
-    if league_weight != 1.0:
-        home_xg *= league_weight
-        away_xg *= league_weight
-        reasons.append(f"🧠 Нейросеть: вес лиги {league_weight:.2f}")
-    return home_xg, away_xg, reasons
-
-def update_odds_history(fixture_id, current_odds):
-    history = load_odds_history()
-    key = str(fixture_id)
-    if key not in history:
-        history[key] = []
-    history[key].append({"time": datetime.now().isoformat(), "odds": current_odds})
-    if len(history[key]) > 10:
-        history[key] = history[key][-10:]
-    save_odds_history(history)
-
-# ===== СУПЕР-СЛОЙ =====
-def calculate_super_ik(match, raw_home_xg, raw_away_xg):
-    reasons = []
-    prior = load_prior()
-    home_prior = prior.get("home", 1.5)
-    away_prior = prior.get("away", 1.3)
-    alpha = 10
-    home_xg = (raw_home_xg * 5 + home_prior * alpha) / (5 + alpha)
-    away_xg = (raw_away_xg * 5 + away_prior * alpha) / (5 + alpha)
-    if raw_home_xg > home_prior * 1.5:
-        reasons.append(f"📊 Байес: xG хозяев скорректирован с {raw_home_xg:.2f} до {home_xg:.2f}")
-    if raw_away_xg > away_prior * 1.5:
-        reasons.append(f"📊 Байес: xG гостей скорректирован с {raw_away_xg:.2f} до {away_xg:.2f}")
-    
-    factors = match.get("factors", {})
-    home_form = factors.get("home_form", {})
-    away_form = factors.get("away_form", {})
-    h2h = factors.get("h2h")
-    
-    home_ratio = home_form.get("ratio", 0.5)
-    away_ratio = away_form.get("ratio", 0.5)
-    if home_ratio < 0.4:
-        home_xg *= 0.95
-        reasons.append("📉 Плохая форма хозяев (-5%)")
-    if away_ratio < 0.4:
-        away_xg *= 0.95
-        reasons.append("📉 Плохая форма гостей (-5%)")
-    if home_ratio > 0.8:
-        home_xg *= 1.05
-        reasons.append("📈 Отличная форма хозяев (+5%)")
-    if away_ratio > 0.8:
-        away_xg *= 1.05
-        reasons.append("📈 Отличная форма гостей (+5%)")
-    
-    home_inj = factors.get("home_injuries", 1.0)
-    away_inj = factors.get("away_injuries", 1.0)
-    if home_inj < 0.9:
-        home_xg *= 0.93
-        reasons.append("🏥 Травмы хозяев (-7%)")
-    if away_inj < 0.9:
-        away_xg *= 0.93
-        reasons.append("🏥 Травмы гостей (-7%)")
-    
-    home_mot = factors.get("home_motivation", 1.0)
-    away_mot = factors.get("away_motivation", 1.0)
-    if home_mot > 1.05:
-        home_xg *= 1.05
-        reasons.append("🎯 Мотивация хозяев (+5%)")
-    if away_mot > 1.05:
-        away_xg *= 1.05
-        reasons.append("🎯 Мотивация гостей (+5%)")
-    
-    home_xg *= 1.05
-    reasons.append("🏠 Домашний стадион (+5%)")
-    
-    if h2h and h2h.get("matches", 0) >= 3:
-        home_wins = h2h.get("home_wins", 0)
-        away_wins = h2h.get("away_wins", 0)
-        total = h2h.get("matches", 1)
-        if home_wins / total > 0.6:
-            home_xg *= 1.05
-            reasons.append("📊 Хозяева доминируют в личных встречах (+5%)")
-        elif away_wins / total > 0.6:
-            away_xg *= 1.05
-            reasons.append("📊 Гости доминируют в личных встречах (+5%)")
-    
-    if h2h and h2h.get("matches", 0) >= 3:
-        home_wins = h2h.get("home_wins", 0)
-        away_wins = h2h.get("away_wins", 0)
-        total = h2h.get("matches", 1)
-        if home_wins / total < 0.2:
-            home_xg *= 0.92
-            reasons.append("⚠️ Хозяева неудобный соперник (-8%)")
-        if away_wins / total < 0.2:
-            away_xg *= 0.92
-            reasons.append("⚠️ Гости неудобный соперник (-8%)")
-    
-    fixture_name = match.get("fixture", {}).get("name", "").lower()
-    league_name = match.get("league", {}).get("name", "").lower()
-    if "derby" in fixture_name or "derby" in league_name:
-        home_xg *= 0.92
-        away_xg *= 0.92
-        reasons.append("⚔️ Дерби: -8% к xG")
-    
-    if home_form.get("losses", 0) >= 3:
-        home_xg *= 0.95
-        reasons.append("📉 Хозяева проиграли 3 матча подряд (-5%)")
-    if away_form.get("losses", 0) >= 3:
-        away_xg *= 0.95
-        reasons.append("📉 Гости проиграли 3 матча подряд (-5%)")
-    
-    home_scorers = factors.get("home_scorers", [])
-    away_scorers = factors.get("away_scorers", [])
-    if home_scorers:
-        reasons.append(f"⚽ Лучший бомбардир хозяев: {home_scorers[0]['name']} ({home_scorers[0]['goals']} голов)")
-    if away_scorers:
-        reasons.append(f"⚽ Лучший бомбардир гостей: {away_scorers[0]['name']} ({away_scorers[0]['goals']} голов)")
-    
-    home_xg, away_xg, add_reasons = apply_improved_form(home_xg, away_xg, match)
-    reasons.extend(add_reasons)
-    home_xg, away_xg, add_reasons = apply_referee(home_xg, away_xg, match)
-    reasons.extend(add_reasons)
-    fixture_id = match.get("fixture", {}).get("id")
-    home_xg, away_xg, add_reasons = apply_odds_movement(home_xg, away_xg, fixture_id)
-    reasons.extend(add_reasons)
-    home_xg, away_xg, add_reasons = apply_psy_factor(home_xg, away_xg, match)
-    reasons.extend(add_reasons)
-    home_xg, away_xg, add_reasons = apply_neural_learning(home_xg, away_xg, league_name)
-    reasons.extend(add_reasons)
-    
-    if fixture_id:
-        update_odds_history(fixture_id, 1.9)
-    
-    return home_xg, away_xg, reasons
-
-# ===== ПОЛУЧЕНИЕ ДАННЫХ =====
+# ===== ОСТАЛЬНЫЕ ФУНКЦИИ =====
 def get_form(team_id):
     try:
         url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
@@ -506,92 +369,290 @@ def get_top_scorers(team_id):
         pass
     return []
 
-def get_real_odds(fixture_id):
-    """Получает реальные коэффициенты на матч из API"""
+def get_team_squad(team_id):
+    try:
+        url = f"https://v3.football.api-sports.io/players/squads?team={team_id}"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        if data.get("response") and data["response"]:
+            squad = data["response"][0].get("players", [])
+            total_age = 0
+            players = []
+            for player in squad[:11]:
+                age = player.get("age", 25)
+                total_age += age
+                players.append({
+                    "name": player.get("name", "Unknown"),
+                    "age": age,
+                    "position": player.get("position", "Unknown"),
+                    "number": player.get("number", 0)
+                })
+            if players:
+                return {
+                    "avg_age": round(total_age / len(players), 1),
+                    "players": players,
+                    "count": len(players)
+                }
+    except:
+        pass
+    return None
+
+def get_odds_from_all_bookmakers(fixture_id):
     try:
         url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
         headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
         resp = requests.get(url, headers=headers, timeout=10)
         data = resp.json()
         
-        if data.get("response") and len(data["response"]) > 0:
-            result = {}
-            # Берём первую букмекерскую контору
-            bookmaker = data["response"][0].get("bookmakers", [])[0] if data["response"][0].get("bookmakers") else None
-            if not bookmaker:
-                return None
-            
+        if not data.get("response") or len(data["response"]) == 0:
+            return None
+        
+        result = {}
+        for bookmaker in data["response"][0].get("bookmakers", []):
+            name = bookmaker.get("name", "Unknown")
             for bet in bookmaker.get("bets", []):
                 if bet.get("name") == "Both Teams To Score":
                     for value in bet.get("values", []):
                         if value.get("value") == "Yes":
-                            result["btts_yes"] = float(value.get("odd", 1.9))
-                        elif value.get("value") == "No":
-                            result["btts_no"] = float(value.get("odd", 2.1))
+                            if "btts_yes" not in result or value.get("odd", 0) > result["btts_yes"]["odd"]:
+                                result["btts_yes"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
                 elif bet.get("name") == "Total Goals Over/Under":
                     for value in bet.get("values", []):
                         if value.get("value") == "Over 2.5":
-                            result["over_2_5"] = float(value.get("odd", 1.85))
+                            if "over_2_5" not in result or value.get("odd", 0) > result["over_2_5"]["odd"]:
+                                result["over_2_5"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
                         elif value.get("value") == "Under 2.5":
-                            result["under_2_5"] = float(value.get("odd", 2.0))
+                            if "under_2_5" not in result or value.get("odd", 0) > result["under_2_5"]["odd"]:
+                                result["under_2_5"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
                 elif bet.get("name") == "Match Winner":
                     for value in bet.get("values", []):
                         if value.get("value") == "Home":
-                            result["home_win"] = float(value.get("odd", 2.1))
+                            if "home_win" not in result or value.get("odd", 0) > result["home_win"]["odd"]:
+                                result["home_win"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
                         elif value.get("value") == "Away":
-                            result["away_win"] = float(value.get("odd", 3.5))
+                            if "away_win" not in result or value.get("odd", 0) > result["away_win"]["odd"]:
+                                result["away_win"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
                         elif value.get("value") == "Draw":
-                            result["draw"] = float(value.get("odd", 3.2))
-            return result if result else None
-    except Exception as e:
-        pass
-    return None
+                            if "draw" not in result or value.get("odd", 0) > result["draw"]["odd"]:
+                                result["draw"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
+        
+        return result if result else None
+    except:
+        return None
 
 def get_matches_with_factors(date=None):
     if date is None:
         date = datetime.now().strftime('%Y-%m-%d')
     all_matches = []
     leagues = load_leagues()
-    for league_id in leagues:
+    
+    def fetch_league(league_id):
         try:
             url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season=2026&date={date}"
             headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
-            resp = requests.get(url, headers=headers, timeout=15)
+            resp = requests.get(url, headers=headers, timeout=5)
             data = resp.json()
-            if data.get("response"):
-                for match in data["response"]:
-                    if match["fixture"]["status"]["short"] == "NS":
-                        home_id = match["teams"]["home"]["id"]
-                        away_id = match["teams"]["away"]["id"]
-                        fixture_id = match["fixture"]["id"]
-                        
-                        home_motivation, home_motivation_text = get_motivation(home_id, league_id)
-                        away_motivation, away_motivation_text = get_motivation(away_id, league_id)
-                        
-                        match["factors"] = {
-                            "home_form": get_form(home_id),
-                            "away_form": get_form(away_id),
-                            "home_injuries": get_injuries(home_id)[0],
-                            "away_injuries": get_injuries(away_id)[0],
-                            "home_injuries_list": get_injuries(home_id)[1],
-                            "away_injuries_list": get_injuries(away_id)[1],
-                            "home_motivation": home_motivation,
-                            "away_motivation": away_motivation,
-                            "home_motivation_text": home_motivation_text,
-                            "away_motivation_text": away_motivation_text,
-                            "home_rank": int(home_motivation_text.split()[0]) if home_motivation_text and home_motivation_text[0].isdigit() else 10,
-                            "away_rank": int(away_motivation_text.split()[0]) if away_motivation_text and away_motivation_text[0].isdigit() else 10,
-                            "h2h": get_h2h(home_id, away_id),
-                            "referee": get_referee_style(fixture_id),
-                            "home_scorers": get_top_scorers(home_id),
-                            "away_scorers": get_top_scorers(away_id),
-                        }
-                        all_matches.append(match)
-        except Exception as e:
-            pass
+            return data.get("response", [])
+        except:
+            return []
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        results = executor.map(fetch_league, leagues)
+        for response in results:
+            all_matches.extend(response)
+    
     return all_matches
 
-# ===== ПОИСК ЛУЧШЕЙ СТАВКИ (С РЕАЛЬНЫМИ КЭФАМИ) =====
+# ===== СЛОИ =====
+def apply_improved_form(home_xg, away_xg, match):
+    if not SETTINGS.get("improved_form", True):
+        return home_xg, away_xg, []
+    reasons = []
+    home_rank = match.get("factors", {}).get("home_rank", 10)
+    away_rank = match.get("factors", {}).get("away_rank", 10)
+    if home_rank < 5 and away_rank > 15:
+        home_xg *= 1.05
+        reasons.append("📈 Улучшенная форма: победа над сильным соперником (+5%)")
+    elif home_rank > 15 and away_rank < 5:
+        away_xg *= 1.05
+        reasons.append("📈 Улучшенная форма: победа над сильным соперником (+5%)")
+    return home_xg, away_xg, reasons
+
+def apply_referee(home_xg, away_xg, match):
+    if not SETTINGS.get("referee", True):
+        return home_xg, away_xg, []
+    reasons = []
+    referee = match.get("factors", {}).get("referee")
+    if referee:
+        strict_referees = ["маттеу", "клос", "лаос", "олсен"]
+        for strict in strict_referees:
+            if strict in referee.lower():
+                home_xg *= 0.95
+                away_xg *= 0.95
+                reasons.append(f"👨‍⚖️ Строгий судья: {referee} (-5% к тоталу)")
+                break
+    return home_xg, away_xg, reasons
+
+def apply_odds_movement(home_xg, away_xg, fixture_id):
+    if not SETTINGS.get("odds_movement", True):
+        return home_xg, away_xg, []
+    reasons = []
+    history = load_odds_history()
+    key = str(fixture_id)
+    if key in history and len(history[key]) >= 2:
+        first_odds = history[key][0].get("odds", 1.9)
+        last_odds = history[key][-1].get("odds", 1.9)
+        if first_odds - last_odds > 0.15:
+            home_xg *= 0.95
+            away_xg *= 0.95
+            reasons.append(f"📉 Кэф упал с {first_odds:.2f} до {last_odds:.2f} → снижение xG на 5%")
+        elif last_odds - first_odds > 0.15:
+            home_xg *= 1.02
+            away_xg *= 1.02
+            reasons.append(f"📈 Кэф вырос с {first_odds:.2f} до {last_odds:.2f} → повышение xG на 2%")
+    return home_xg, away_xg, reasons
+
+def apply_psy_factor(home_xg, away_xg, match):
+    if not SETTINGS.get("psy_factor", True):
+        return home_xg, away_xg, []
+    reasons = []
+    fixture_name = match.get("fixture", {}).get("name", "").lower()
+    league_name = match.get("league", {}).get("name", "").lower()
+    home_form = match.get("factors", {}).get("home_form", {})
+    away_form = match.get("factors", {}).get("away_form", {})
+    if "derby" in fixture_name or "derby" in league_name:
+        home_xg *= 0.92
+        away_xg *= 0.92
+        reasons.append("🧠 Дерби: высокое давление (-8% к xG)")
+    if home_form.get("losses", 0) >= 3 and away_form.get("wins", 0) >= 3:
+        home_xg *= 0.93
+        away_xg *= 1.05
+        reasons.append("🧠 Кризис vs подъём: хозяева в кризисе (-7%), гости на подъёме (+5%)")
+    return home_xg, away_xg, reasons
+
+def apply_neural_learning(home_xg, away_xg, league):
+    if not SETTINGS.get("neural_learning", True):
+        return home_xg, away_xg, []
+    reasons = []
+    weights = load_weights()
+    league_weight = weights.get(league, {}).get("xg", 1.0)
+    if league_weight != 1.0:
+        home_xg *= league_weight
+        away_xg *= league_weight
+        reasons.append(f"🧠 Нейросеть: вес лиги {league_weight:.2f}")
+    return home_xg, away_xg, reasons
+
+def update_odds_history(fixture_id, current_odds):
+    history = load_odds_history()
+    key = str(fixture_id)
+    if key not in history:
+        history[key] = []
+    history[key].append({"time": datetime.now().isoformat(), "odds": current_odds})
+    if len(history[key]) > 10:
+        history[key] = history[key][-10:]
+    save_odds_history(history)
+
+def calculate_super_ik(match, raw_home_xg, raw_away_xg):
+    reasons = []
+    prior = load_prior()
+    home_prior = prior.get("home", 1.5)
+    away_prior = prior.get("away", 1.3)
+    alpha = 10
+    home_xg = (raw_home_xg * 5 + home_prior * alpha) / (5 + alpha)
+    away_xg = (raw_away_xg * 5 + away_prior * alpha) / (5 + alpha)
+    
+    factors = match.get("factors", {})
+    home_form = factors.get("home_form", {})
+    away_form = factors.get("away_form", {})
+    h2h = factors.get("h2h")
+    
+    home_ratio = home_form.get("ratio", 0.5)
+    away_ratio = away_form.get("ratio", 0.5)
+    if home_ratio < 0.4:
+        home_xg *= 0.95
+        reasons.append("📉 Плохая форма хозяев (-5%)")
+    if away_ratio < 0.4:
+        away_xg *= 0.95
+        reasons.append("📉 Плохая форма гостей (-5%)")
+    if home_ratio > 0.8:
+        home_xg *= 1.05
+        reasons.append("📈 Отличная форма хозяев (+5%)")
+    if away_ratio > 0.8:
+        away_xg *= 1.05
+        reasons.append("📈 Отличная форма гостей (+5%)")
+    
+    home_inj = factors.get("home_injuries", 1.0)
+    away_inj = factors.get("away_injuries", 1.0)
+    if home_inj < 0.9:
+        home_xg *= 0.93
+        reasons.append("🏥 Травмы хозяев (-7%)")
+    if away_inj < 0.9:
+        away_xg *= 0.93
+        reasons.append("🏥 Травмы гостей (-7%)")
+    
+    home_mot = factors.get("home_motivation", 1.0)
+    away_mot = factors.get("away_motivation", 1.0)
+    if home_mot > 1.05:
+        home_xg *= 1.05
+        reasons.append("🎯 Мотивация хозяев (+5%)")
+    if away_mot > 1.05:
+        away_xg *= 1.05
+        reasons.append("🎯 Мотивация гостей (+5%)")
+    
+    home_xg *= 1.05
+    reasons.append("🏠 Домашний стадион (+5%)")
+    
+    if h2h and h2h.get("matches", 0) >= 3:
+        home_wins = h2h.get("home_wins", 0)
+        away_wins = h2h.get("away_wins", 0)
+        total = h2h.get("matches", 1)
+        if home_wins / total > 0.6:
+            home_xg *= 1.05
+            reasons.append("📊 Хозяева доминируют в личных встречах (+5%)")
+        elif away_wins / total > 0.6:
+            away_xg *= 1.05
+            reasons.append("📊 Гости доминируют в личных встречах (+5%)")
+    
+    fixture_name = match.get("fixture", {}).get("name", "").lower()
+    league_name = match.get("league", {}).get("name", "").lower()
+    if "derby" in fixture_name or "derby" in league_name:
+        home_xg *= 0.92
+        away_xg *= 0.92
+        reasons.append("⚔️ Дерби: -8% к xG")
+    
+    if home_form.get("losses", 0) >= 3:
+        home_xg *= 0.95
+        reasons.append("📉 Хозяева проиграли 3 матча подряд (-5%)")
+    if away_form.get("losses", 0) >= 3:
+        away_xg *= 0.95
+        reasons.append("📉 Гости проиграли 3 матча подряд (-5%)")
+    
+    home_scorers = factors.get("home_scorers", [])
+    away_scorers = factors.get("away_scorers", [])
+    if home_scorers:
+        reasons.append(f"⚽ Лучший бомбардир хозяев: {home_scorers[0]['name']} ({home_scorers[0]['goals']} голов)")
+    if away_scorers:
+        reasons.append(f"⚽ Лучший бомбардир гостей: {away_scorers[0]['name']} ({away_scorers[0]['goals']} голов)")
+    
+    fixture_id = match.get("fixture", {}).get("id")
+    home_xg, away_xg, add_reasons = apply_improved_form(home_xg, away_xg, match)
+    reasons.extend(add_reasons)
+    home_xg, away_xg, add_reasons = apply_referee(home_xg, away_xg, match)
+    reasons.extend(add_reasons)
+    home_xg, away_xg, add_reasons = apply_odds_movement(home_xg, away_xg, fixture_id)
+    reasons.extend(add_reasons)
+    home_xg, away_xg, add_reasons = apply_psy_factor(home_xg, away_xg, match)
+    reasons.extend(add_reasons)
+    home_xg, away_xg, add_reasons = apply_neural_learning(home_xg, away_xg, league_name)
+    reasons.extend(add_reasons)
+    
+    if fixture_id:
+        update_odds_history(fixture_id, 1.9)
+    
+    return home_xg, away_xg, reasons
+
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
 def find_best_bet(matches):
     bank = load_bank()
     best_bet = None
@@ -606,8 +667,7 @@ def find_best_bet(matches):
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
             
-            # ===== ПОЛУЧАЕМ РЕАЛЬНЫЕ КЭФЫ =====
-            real_odds = get_real_odds(fixture_id)
+            real_odds = get_odds_from_all_bookmakers(fixture_id)
             if not real_odds:
                 continue
             
@@ -628,46 +688,50 @@ def find_best_bet(matches):
                             raw_away_xg = float(item["value"] or 1.3)
             
             home_xg, away_xg, ik_reasons = calculate_super_ik(match, raw_home_xg, raw_away_xg)
+            
+            # ===== ПОГОДА =====
+            weather_info = None
+            weather_impact = 0
+            weather_reason = ""
+            
+            # Получаем координаты стадиона хозяев через API
+            coords = get_stadium_coords_from_api(home)
+            if coords:
+                weather = get_weather(coords["lat"], coords["lon"])
+                if weather:
+                    weather_impact, weather_reason = get_weather_impact(weather)
+                    home_xg *= (1 + weather_impact / 100)
+                    away_xg *= (1 + weather_impact / 100)
+                    weather_info = {
+                        "temp": weather["temp"],
+                        "condition": weather["condition"],
+                        "description": weather["description"],
+                        "wind": weather["wind"],
+                        "humidity": weather["humidity"],
+                        "impact": weather_impact,
+                        "reason": weather_reason,
+                        "city": coords.get("city", "Unknown")
+                    }
+                    ik_reasons.append(f"🌤️ {weather_reason}")
+            
             probs = calculate_probs(home_xg, away_xg)
             
-            # ===== БЕТ-ТИПЫ С РЕАЛЬНЫМИ КЭФАМИ =====
             bet_types = []
             
-            # ОЗ - ДА
-            btts_yes_odds = real_odds.get("btts_yes", 1.9)
-            bet_types.append(("btts", btts_yes_odds, "ОЗ - ДА"))
+            if "btts_yes" in real_odds:
+                bet_types.append(("btts", real_odds["btts_yes"]["odd"], "ОЗ - ДА", real_odds["btts_yes"]["bookmaker"]))
+            if "over_2_5" in real_odds:
+                bet_types.append(("over_2_5", real_odds["over_2_5"]["odd"], "Тотал > 2.5", real_odds["over_2_5"]["bookmaker"]))
+            if "under_2_5" in real_odds:
+                bet_types.append(("under_2_5", real_odds["under_2_5"]["odd"], "Тотал < 2.5", real_odds["under_2_5"]["bookmaker"]))
+            if "home_win" in real_odds:
+                bet_types.append(("home_win", real_odds["home_win"]["odd"], "Победа хозяев", real_odds["home_win"]["bookmaker"]))
+            if "away_win" in real_odds:
+                bet_types.append(("away_win", real_odds["away_win"]["odd"], "Победа гостей", real_odds["away_win"]["bookmaker"]))
+            if "draw" in real_odds:
+                bet_types.append(("draw", real_odds["draw"]["odd"], "Ничья", real_odds["draw"]["bookmaker"]))
             
-            # Тотал > 2.5
-            over_odds = real_odds.get("over_2_5", 1.85)
-            bet_types.append(("over_2_5", over_odds, "Тотал > 2.5"))
-            
-            # Тотал < 2.5
-            under_odds = real_odds.get("under_2_5", 2.0)
-            bet_types.append(("under_2_5", under_odds, "Тотал < 2.5"))
-            
-            # Победа хозяев
-            home_win_odds = real_odds.get("home_win", 2.1)
-            bet_types.append(("home_win", home_win_odds, "Победа хозяев"))
-            
-            # Победа гостей
-            away_win_odds = real_odds.get("away_win", 3.5)
-            bet_types.append(("away_win", away_win_odds, "Победа гостей"))
-            
-            # Ничья
-            draw_odds = real_odds.get("draw", 3.2)
-            bet_types.append(("draw", draw_odds, "Ничья"))
-            
-            # 1Х (хозяева не проиграют)
-            if draw_odds and home_win_odds:
-                home_or_draw_odds = 1 / ((1 / home_win_odds) + (1 / draw_odds))
-                bet_types.append(("home_or_draw", home_or_draw_odds, "1Х"))
-            
-            # 2Х (гости не проиграют)
-            if draw_odds and away_win_odds:
-                away_or_draw_odds = 1 / ((1 / away_win_odds) + (1 / draw_odds))
-                bet_types.append(("away_or_draw", away_or_draw_odds, "2Х"))
-            
-            for bet_type, odds, label in bet_types:
+            for bet_type, odds, label, bookmaker in bet_types:
                 prob = probs.get(bet_type, 0)
                 if prob < 0.1 or prob > 0.99:
                     continue
@@ -677,6 +741,10 @@ def find_best_bet(matches):
                     stake = bank * 0.05
                     if stake < 1:
                         stake = 1
+                    
+                    home_squad = get_team_squad(match["teams"]["home"]["id"])
+                    away_squad = get_team_squad(match["teams"]["away"]["id"])
+                    
                     best_bet = {
                         "home": home,
                         "away": away,
@@ -686,6 +754,7 @@ def find_best_bet(matches):
                         "bet": label,
                         "bet_type": bet_type,
                         "odds": round(odds, 2),
+                        "bookmaker": bookmaker,
                         "real_odds": real_odds,
                         "prob": round(prob * 100, 1),
                         "ev": round(ev * 100, 1),
@@ -696,6 +765,9 @@ def find_best_bet(matches):
                         "raw_away_xg": round(raw_away_xg, 2),
                         "ik_reasons": ik_reasons,
                         "referee": factors.get("referee"),
+                        "home_squad": home_squad,
+                        "away_squad": away_squad,
+                        "weather": weather_info,
                         "factors": {
                             "home_form": round(factors.get("home_form", {}).get("ratio", 0.5), 2),
                             "away_form": round(factors.get("away_form", {}).get("ratio", 0.5), 2),
@@ -711,14 +783,13 @@ def find_best_bet(matches):
                             "away_scorers": factors.get("away_scorers", []),
                         }
                     }
-        except Exception as e:
+        except:
             pass
     
     if best_bet and best_ev > 0.05:
         return best_bet
     return None
 
-# ===== ОБУЧЕНИЕ =====
 def train_model():
     history = load_history()
     if len(history) < 30:
@@ -751,7 +822,6 @@ def train_model():
         }
         save_prior(prior)
 
-# ===== ОТПРАВКА В ТЕЛЕГРАМ =====
 def send_telegram_with_buttons(text, bet_id):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -780,17 +850,65 @@ def send_telegram(text):
     except:
         pass
 
-# ===== ФОНОВОЕ ОБНОВЛЕНИЕ =====
+# ===== УВЕДОМЛЕНИЯ =====
+def check_and_notify():
+    matches = get_matches_with_factors()
+    bet = find_best_bet(matches)
+    
+    if bet:
+        key = f"{bet['fixture_id']}_{bet['bet_type']}"
+        if key not in last_notified_bets or last_notified_bets[key] != bet['ev']:
+            last_notified_bets[key] = bet['ev']
+            send_bet_notification(bet)
+
+def send_bet_notification(bet):
+    factors = bet.get("factors", {})
+    ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+    real_odds = bet.get("real_odds", {})
+    
+    weather_info = ""
+    if bet.get("weather"):
+        w = bet["weather"]
+        emoji = "☀️" if w["condition"] == "Clear" else "🌧️" if "Rain" in w["condition"] else "☁️"
+        weather_info = f"""
+🌤️ <b>ПОГОДА:</b>
+{emoji} {w['description']}, {w['temp']}°C
+💨 Ветер: {w['wind']} км/ч
+💧 Влажность: {w['humidity']}%
+📊 Влияние: {w['impact']}% ({w['reason']})"""
+    
+    squad_info = ""
+    if bet.get("home_squad"):
+        squad_info += f"\n👥 Состав хозяев: {bet['home_squad']['count']} игроков, средний возраст {bet['home_squad']['avg_age']} лет"
+    if bet.get("away_squad"):
+        squad_info += f"\n👥 Состав гостей: {bet['away_squad']['count']} игроков, средний возраст {bet['away_squad']['avg_age']} лет"
+    
+    msg = f"""🔥 <b>НОВАЯ ВАЛУЙНАЯ СТАВКА!</b> 🚀
+
+🏟️ {bet['home']} vs {bet['away']}
+🏆 {bet['league']}
+
+🎯 <b>{bet['bet']}</b>
+📈 КЭФ: {bet['odds']} ({bet.get('bookmaker', 'неизвестно')})
+💰 РАЗМЕР: {bet['stake']}$ (5% банка)
+📊 УВЕРЕННОСТЬ: {bet['prob']}%
+📈 EV: <b>{bet['ev']}%</b>
+
+📊 xG: {bet['home_xg']} : {bet['away_xg']}
+👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
+{weather_info}
+{squad_info}
+
+🧠 <b>СУПЕР-СЛОЙ:</b>
+{ik_reasons}"""
+    
+    send_telegram_with_buttons(msg, f"{bet['fixture_id']}_{bet['bet_type']}")
+
 def scheduled_update():
     while True:
         now = datetime.now()
-        if now.hour in [10, 18] and now.minute == 0:
-            send_telegram("🔄 Плановое обновление кеша...")
-            matches = get_matches_with_factors()
-            best = find_best_bet(matches)
-            save_cache({"best_bet": best})
-            train_model()
-            send_telegram(f"✅ Кеш обновлён! Лучшая ставка найдена." if best else "❌ Ставок не найдено")
+        if now.minute == 0:
+            check_and_notify()
         time.sleep(60)
 
 threading.Thread(target=scheduled_update, daemon=True).start()
@@ -819,7 +937,6 @@ def webhook():
     
     if data and 'message' in data:
         text = data['message'].get('text', '')
-        chat_id = data['message']['chat']['id']
         
         if text == '/start':
             send_telegram("🚀 Бот запущен! Напиши /today для поиска ставок")
@@ -852,12 +969,31 @@ def webhook():
                 if factors.get("away_scorers"):
                     scorers_info += f"\n⚽ Лучший бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
                 
+                squad_info = ""
+                if bet.get("home_squad"):
+                    squad_info += f"\n👥 Состав хозяев: {bet['home_squad']['count']} игроков, средний возраст {bet['home_squad']['avg_age']} лет"
+                if bet.get("away_squad"):
+                    squad_info += f"\n👥 Состав гостей: {bet['away_squad']['count']} игроков, средний возраст {bet['away_squad']['avg_age']} лет"
+                
+                weather_info = ""
+                if bet.get("weather"):
+                    w = bet["weather"]
+                    emoji = "☀️" if w["condition"] == "Clear" else "🌧️" if "Rain" in w["condition"] else "☁️"
+                    weather_info = f"""
+🌤️ <b>ПОГОДА:</b>
+{emoji} {w['description']}, {w['temp']}°C
+💨 Ветер: {w['wind']} км/ч
+💧 Влажность: {w['humidity']}%
+📊 Влияние: {w['impact']}% ({w['reason']})"""
+                
                 real_odds_info = ""
                 if real_odds:
-                    real_odds_info = f"""📊 <b>РЕАЛЬНЫЕ КЭФЫ:</b>
-ОЗ - ДА: {real_odds.get('btts_yes', '—')}  |  ОЗ - НЕТ: {real_odds.get('btts_no', '—')}
-Тотал > 2.5: {real_odds.get('over_2_5', '—')}  |  Тотал < 2.5: {real_odds.get('under_2_5', '—')}
-П1: {real_odds.get('home_win', '—')}  |  X: {real_odds.get('draw', '—')}  |  П2: {real_odds.get('away_win', '—')}"""
+                    real_odds_info = f"""📊 <b>СРАВНЕНИЕ КЭФОВ (ЛУЧШИЕ):</b>
+ОЗ - ДА: {real_odds.get('btts_yes', {}).get('odd', '—')} ({real_odds.get('btts_yes', {}).get('bookmaker', '—')})
+Тотал > 2.5: {real_odds.get('over_2_5', {}).get('odd', '—')} ({real_odds.get('over_2_5', {}).get('bookmaker', '—')})
+П1: {real_odds.get('home_win', {}).get('odd', '—')} ({real_odds.get('home_win', {}).get('bookmaker', '—')})
+X: {real_odds.get('draw', {}).get('odd', '—')} ({real_odds.get('draw', {}).get('bookmaker', '—')})
+П2: {real_odds.get('away_win', {}).get('odd', '—')} ({real_odds.get('away_win', {}).get('bookmaker', '—')})"""
                 
                 settings_status = f"""
 ⚙️ <b>Активные слои:</b>
@@ -874,13 +1010,15 @@ def webhook():
 🏆 {bet['league']}
 
 🎯 <b>{bet['bet']}</b>
-📈 КЭФ: {bet['odds']}
+📈 КЭФ: {bet['odds']} ({bet.get('bookmaker', 'неизвестно')})
 💰 РАЗМЕР: {bet['stake']}$ (5% банка)
 📊 УВЕРЕННОСТЬ: {bet['prob']}%
-📈 EV: <b>{bet['ev']}%</b> ← САМЫЙ ВЫСОКИЙ!
+📈 EV: <b>{bet['ev']}%</b>
 
 📊 xG: {bet['home_xg']} : {bet['away_xg']} (сырые: {bet['raw_home_xg']} : {bet['raw_away_xg']})
 👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
+{weather_info}
+{squad_info}
 
 {real_odds_info}
 
@@ -907,29 +1045,18 @@ def webhook():
             save_cache({"best_bet": bet})
             train_model()
             if bet:
-                factors = bet.get("factors", {})
-                ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
-                real_odds = bet.get("real_odds", {})
-                
-                real_odds_info = ""
-                if real_odds:
-                    real_odds_info = f"\n📊 Реальные кэфы: ОЗ {real_odds.get('btts_yes', '—')} | Тотал > 2.5 {real_odds.get('over_2_5', '—')}"
-                
                 msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ НА ЗАВТРА</b>
 
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
 
 🎯 <b>{bet['bet']}</b>
-📈 КЭФ: {bet['odds']}
+📈 КЭФ: {bet['odds']} ({bet.get('bookmaker', 'неизвестно')})
 💰 РАЗМЕР: {bet['stake']}$ (5% банка)
 📊 УВЕРЕННОСТЬ: {bet['prob']}%
-📈 EV: <b>{bet['ev']}%</b>{real_odds_info}
+📈 EV: <b>{bet['ev']}%</b>
 
-📊 xG: {bet['home_xg']} : {bet['away_xg']}
-
-🧠 <b>СУПЕР-СЛОЙ:</b>
-{ik_reasons}"""
+📊 xG: {bet['home_xg']} : {bet['away_xg']}"""
                 send_telegram_with_buttons(msg, f"{bet['fixture_id']}_{bet['bet_type']}")
             else:
                 send_telegram(f"❌ На {tomorrow} валуйных ставок не найдено")
@@ -937,13 +1064,53 @@ def webhook():
         elif text == '/matches':
             matches = get_matches_with_factors()
             if matches:
-                leagues_found = set()
+                leagues_found = {}
                 for m in matches:
-                    leagues_found.add(m.get("league", {}).get("name", "Неизвестно"))
+                    league = m.get("league", {}).get("name", "Неизвестно")
+                    leagues_found[league] = leagues_found.get(league, 0) + 1
                 msg = f"✅ Найдено {len(matches)} матчей на сегодня\n\n"
-                for league in sorted(leagues_found):
-                    count = sum(1 for m in matches if m.get("league", {}).get("name") == league)
+                for league, count in sorted(leagues_found.items()):
                     msg += f"• {league}: {count} матчей\n"
+                send_telegram(msg)
+            else:
+                send_telegram("❌ Матчей на сегодня не найдено")
+        
+        elif text == '/list_matches':
+            matches = get_matches_with_factors()
+            if matches:
+                msg = "📋 <b>ВСЕ МАТЧИ НА СЕГОДНЯ:</b>\n\n"
+                for m in matches[:15]:
+                    home = m["teams"]["home"]["name"]
+                    away = m["teams"]["away"]["name"]
+                    league = m["league"]["name"]
+                    fixture_id = m["fixture"]["id"]
+                    status = m["fixture"]["status"]["short"]
+                    
+                    try:
+                        stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
+                        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+                        resp = requests.get(stats_url, headers=headers, timeout=5)
+                        stats = resp.json()
+                        home_xg, away_xg = 1.5, 1.3
+                        for stat in stats.get("response", []):
+                            if stat["team"]["name"] == home:
+                                for item in stat.get("statistics", []):
+                                    if item["type"] == "expected_goals":
+                                        home_xg = float(item["value"] or 1.5)
+                            elif stat["team"]["name"] == away:
+                                for item in stat.get("statistics", []):
+                                    if item["type"] == "expected_goals":
+                                        away_xg = float(item["value"] or 1.3)
+                    except:
+                        home_xg, away_xg = 1.5, 1.3
+                    
+                    status_emoji = "🔴" if status in ["1H", "2H"] else "🟢" if status == "NS" else "⚪"
+                    msg += f"{status_emoji} {home} vs {away}\n"
+                    msg += f"   🏆 {league} | xG: {home_xg:.2f} : {away_xg:.2f}\n\n"
+                
+                if len(matches) > 15:
+                    msg += f"и ещё {len(matches) - 15} матчей..."
+                
                 send_telegram(msg)
             else:
                 send_telegram("❌ Матчей на сегодня не найдено")
@@ -996,7 +1163,7 @@ def webhook():
 🏆 {bet['league']}
 
 🎯 <b>{bet['bet']}</b>
-📈 КЭФ: {bet['odds']}
+📈 КЭФ: {bet['odds']} ({bet.get('bookmaker', 'неизвестно')})
 💰 РАЗМЕР: {bet['stake']}$ (5% банка)
 📊 УВЕРЕННОСТЬ: {bet['prob']}%
 📈 EV: <b>{bet['ev']}%</b>"""
@@ -1048,7 +1215,7 @@ def webhook():
 PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
 Нейросетевое обучение: {'✅ Вкл' if SETTINGS['neural_learning'] else '❌ Выкл'}
 
-Используйте /toggle [номер] чтобы включить/выключить слой:
+Используйте /toggle [номер]:
 1 - Улучшенная форма
 2 - Судья
 3 - Движение кэфов
@@ -1074,6 +1241,7 @@ PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
 /today - ЛУЧШАЯ ставка на сегодня
 /tomorrow - ЛУЧШАЯ ставка на завтра
 /matches - Показать матчи на сегодня
+/list_matches - Показать ВСЕ матчи с xG
 /leagues - Список всех лиг
 /add_league ID - Добавить лигу
 /remove_league ID - Удалить лигу
@@ -1093,7 +1261,7 @@ PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Quantum Bot v9.0 Ultimate with Real Odds is running!"
+    return "Quantum Bot v10.0 Ultimate with Weather & All Teams!"
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
