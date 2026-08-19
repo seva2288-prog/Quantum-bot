@@ -16,12 +16,51 @@ TELEGRAM_TOKEN = "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74"
 FOOTBALL_API_KEY = "3e01a7f37589da560393ad459bfd61ff"
 WEATHER_API_KEY = "7f0cfaed346b0fe364815ab65d627af2"
 
-# ===== ВСЕ ЛИГИ =====
+# ===== ВСЕ ЛИГИ (60 ЛИГ) =====
 LEAGUES = [
-    39, 140, 78, 135, 61, 40, 141, 79, 136, 62,
-    2, 3, 848, 88, 89, 94, 203, 197, 345, 106,
-    207, 90, 242, 272, 276, 283, 288, 253, 289,
-    290, 291, 179, 218, 240, 1, 12, 45, 46, 47, 48, 50
+    # ⭐ ТОП-5
+    39, 140, 78, 135, 61,
+    # 📊 ВТОРЫЕ ДИВИЗИОНЫ
+    40, 141, 79, 136, 62,
+    # 🏆 ЕВРОКУБКИ
+    2, 3, 848,
+    # 🇪🇺 ЗАПАДНАЯ ЕВРОПА
+    88, 89, 94, 203, 197, 345, 106, 207,
+    # 🇷🇺 ВОСТОЧНАЯ ЕВРОПА
+    90, 242, 272, 276, 283, 288, 253, 289, 290, 291,
+    # ❄️ СЕВЕРНАЯ ЕВРОПА
+    179, 218, 240,
+    # 🏆 КУБКИ
+    1, 12, 45, 46, 47, 48, 50,
+    # 🌎 ЮЖНАЯ АМЕРИКА
+    71,   # Brasileirão
+    128,  # Argentine Primera
+    169,  # Uruguayan Primera
+    172,  # Chilean Primera
+    176,  # Colombian Primera
+    # 🌏 АЗИЯ
+    138,  # J1 League
+    139,  # K League
+    144,  # Saudi Pro League
+    148,  # UAE Pro League
+    149,  # Qatar Stars
+    # 🌎 СЕВЕРНАЯ АМЕРИКА
+    142,  # Liga MX
+    # 🌍 АФРИКА
+    137,  # Egyptian Premier League
+    140,  # South African Premier
+    # 🇪🇺 ДРУГИЕ ЕВРОПЕЙСКИЕ
+    250,  # Cyprus First Division
+    251,  # Icelandic Premier
+    252,  # Finnish Premier
+    260,  # Albanian Superliga
+    261,  # Macedonian First League
+    262,  # Georgian Erovnuli Liga
+    263,  # Armenian Premier
+    264,  # Azerbaijani Premier
+    265,  # Kazakh Premier
+    266,  # Uzbek Super League
+    267,  # Belarusian Premier
 ]
 
 LEAGUE_NAMES = {
@@ -34,7 +73,14 @@ LEAGUE_NAMES = {
     288: "Сербия", 253: "Румыния", 289: "Болгария", 290: "Словакия", 291: "Словения",
     179: "Дания", 218: "Норвегия", 240: "Швеция",
     1: "Кубок мира", 12: "Кубок Англии", 45: "Кубок Испании",
-    46: "Кубок Германии", 47: "Кубок Италии", 48: "Кубок Франции", 50: "Кубок Лиги"
+    46: "Кубок Германии", 47: "Кубок Италии", 48: "Кубок Франции", 50: "Кубок Лиги",
+    71: "Бразилейрао", 128: "Аргентина", 169: "Уругвай", 172: "Чили", 176: "Колумбия",
+    138: "J1 Лига", 139: "K Лига", 144: "Саудовская Аравия", 148: "ОАЭ", 149: "Катар",
+    142: "Liga MX", 137: "Египет", 140: "ЮАР",
+    250: "Кипр", 251: "Исландия", 252: "Финляндия",
+    260: "Албания", 261: "Македония", 262: "Грузия",
+    263: "Армения", 264: "Азербайджан", 265: "Казахстан",
+    266: "Узбекистан", 267: "Беларусь"
 }
 
 SETTINGS = {
@@ -145,15 +191,12 @@ def calculate_probs(home_xg, away_xg):
         "away_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i <= j),
     }
 
-# ===== ПОЛУЧЕНИЕ КООРДИНАТ СТАДИОНА ЧЕРЕЗ API =====
 def get_stadium_coords_from_api(team_name):
-    """Получает координаты стадиона через API по названию команды"""
     try:
         url = f"https://v3.football.api-sports.io/teams?search={team_name}"
         headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
         resp = requests.get(url, headers=headers, timeout=5)
         data = resp.json()
-        
         if data.get("response") and len(data["response"]) > 0:
             venue = data["response"][0].get("venue")
             if venue and venue.get("latitude") and venue.get("longitude"):
@@ -167,9 +210,7 @@ def get_stadium_coords_from_api(team_name):
         pass
     return None
 
-# ===== ПОЛУЧЕНИЕ ПОГОДЫ =====
 def get_weather(lat, lon):
-    """Получает погоду по координатам через OpenWeatherMap"""
     try:
         url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&units=metric&appid={WEATHER_API_KEY}"
         resp = requests.get(url, timeout=5)
@@ -189,7 +230,6 @@ def get_weather(lat, lon):
     return None
 
 def get_weather_impact(weather):
-    """Рассчитывает влияние погоды на xG"""
     if not weather:
         return 0, "🌤️ Нет данных о погоде"
     
@@ -231,7 +271,6 @@ def get_weather_impact(weather):
     
     return impact, reason
 
-# ===== ОСТАЛЬНЫЕ ФУНКЦИИ =====
 def get_form(team_id):
     try:
         url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
@@ -404,10 +443,8 @@ def get_odds_from_all_bookmakers(fixture_id):
         headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
         resp = requests.get(url, headers=headers, timeout=10)
         data = resp.json()
-        
         if not data.get("response") or len(data["response"]) == 0:
             return None
-        
         result = {}
         for bookmaker in data["response"][0].get("bookmakers", []):
             name = bookmaker.get("name", "Unknown")
@@ -436,7 +473,6 @@ def get_odds_from_all_bookmakers(fixture_id):
                         elif value.get("value") == "Draw":
                             if "draw" not in result or value.get("odd", 0) > result["draw"]["odd"]:
                                 result["draw"] = {"odd": float(value.get("odd", 0)), "bookmaker": name}
-        
         return result if result else None
     except:
         return None
@@ -464,7 +500,6 @@ def get_matches_with_factors(date=None):
     
     return all_matches
 
-# ===== СЛОИ =====
 def apply_improved_form(home_xg, away_xg, match):
     if not SETTINGS.get("improved_form", True):
         return home_xg, away_xg, []
@@ -652,7 +687,6 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
     
     return home_xg, away_xg, reasons
 
-# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
 def find_best_bet(matches):
     bank = load_bank()
     best_bet = None
@@ -689,13 +723,11 @@ def find_best_bet(matches):
             
             home_xg, away_xg, ik_reasons = calculate_super_ik(match, raw_home_xg, raw_away_xg)
             
-            # ===== ПОГОДА =====
+            coords = get_stadium_coords_from_api(home)
             weather_info = None
             weather_impact = 0
             weather_reason = ""
             
-            # Получаем координаты стадиона хозяев через API
-            coords = get_stadium_coords_from_api(home)
             if coords:
                 weather = get_weather(coords["lat"], coords["lon"])
                 if weather:
@@ -850,7 +882,6 @@ def send_telegram(text):
     except:
         pass
 
-# ===== УВЕДОМЛЕНИЯ =====
 def check_and_notify():
     matches = get_matches_with_factors()
     bet = find_best_bet(matches)
@@ -913,7 +944,6 @@ def scheduled_update():
 
 threading.Thread(target=scheduled_update, daemon=True).start()
 
-# ===== ВЕБХУК =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -1261,7 +1291,7 @@ PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Quantum Bot v10.0 Ultimate with Weather & All Teams!"
+    return "Quantum Bot v10.0 Ultimate with 60 Leagues, Weather & All Teams!"
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
