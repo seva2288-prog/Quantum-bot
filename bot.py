@@ -156,6 +156,7 @@ def calculate_probs(home_xg, away_xg):
     return {
         "btts": sum(probs[i][j] for i in range(1, 7) for j in range(1, 7)),
         "over_2_5": sum(probs[i][j] for i in range(7) for j in range(7) if i + j > 2.5),
+        "under_2_5": sum(probs[i][j] for i in range(7) for j in range(7) if i + j < 2.5),
         "home_win": sum(probs[i][j] for i in range(7) for j in range(7) if i > j),
         "away_win": sum(probs[i][j] for i in range(7) for j in range(7) if i < j),
         "draw": sum(probs[i][i] for i in range(7)),
@@ -505,6 +506,47 @@ def get_top_scorers(team_id):
         pass
     return []
 
+def get_real_odds(fixture_id):
+    """Получает реальные коэффициенты на матч из API"""
+    try:
+        url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
+        headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        
+        if data.get("response") and len(data["response"]) > 0:
+            result = {}
+            # Берём первую букмекерскую контору
+            bookmaker = data["response"][0].get("bookmakers", [])[0] if data["response"][0].get("bookmakers") else None
+            if not bookmaker:
+                return None
+            
+            for bet in bookmaker.get("bets", []):
+                if bet.get("name") == "Both Teams To Score":
+                    for value in bet.get("values", []):
+                        if value.get("value") == "Yes":
+                            result["btts_yes"] = float(value.get("odd", 1.9))
+                        elif value.get("value") == "No":
+                            result["btts_no"] = float(value.get("odd", 2.1))
+                elif bet.get("name") == "Total Goals Over/Under":
+                    for value in bet.get("values", []):
+                        if value.get("value") == "Over 2.5":
+                            result["over_2_5"] = float(value.get("odd", 1.85))
+                        elif value.get("value") == "Under 2.5":
+                            result["under_2_5"] = float(value.get("odd", 2.0))
+                elif bet.get("name") == "Match Winner":
+                    for value in bet.get("values", []):
+                        if value.get("value") == "Home":
+                            result["home_win"] = float(value.get("odd", 2.1))
+                        elif value.get("value") == "Away":
+                            result["away_win"] = float(value.get("odd", 3.5))
+                        elif value.get("value") == "Draw":
+                            result["draw"] = float(value.get("odd", 3.2))
+            return result if result else None
+    except Exception as e:
+        pass
+    return None
+
 def get_matches_with_factors(date=None):
     if date is None:
         date = datetime.now().strftime('%Y-%m-%d')
@@ -549,7 +591,7 @@ def get_matches_with_factors(date=None):
             pass
     return all_matches
 
-# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ (С РЕАЛЬНЫМИ КЭФАМИ) =====
 def find_best_bet(matches):
     bank = load_bank()
     best_bet = None
@@ -563,6 +605,11 @@ def find_best_bet(matches):
             league_id = match["league"]["id"]
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
+            
+            # ===== ПОЛУЧАЕМ РЕАЛЬНЫЕ КЭФЫ =====
+            real_odds = get_real_odds(fixture_id)
+            if not real_odds:
+                continue
             
             stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
             headers = {"x-rapidapi-key": FOOTBALL_API_KEY}
@@ -583,20 +630,48 @@ def find_best_bet(matches):
             home_xg, away_xg, ik_reasons = calculate_super_ik(match, raw_home_xg, raw_away_xg)
             probs = calculate_probs(home_xg, away_xg)
             
-            bet_types = [
-                ("btts", 1.9, "ОЗ - ДА"),
-                ("over_2_5", 1.85, "Тотал > 2.5"),
-                ("home_win", 2.1, "Победа хозяев"),
-                ("away_win", 2.1, "Победа гостей"),
-                ("home_or_draw", 1.6, "1Х"),
-                ("away_or_draw", 1.6, "2Х"),
-            ]
+            # ===== БЕТ-ТИПЫ С РЕАЛЬНЫМИ КЭФАМИ =====
+            bet_types = []
             
-            for bet_type, default_odds, label in bet_types:
+            # ОЗ - ДА
+            btts_yes_odds = real_odds.get("btts_yes", 1.9)
+            bet_types.append(("btts", btts_yes_odds, "ОЗ - ДА"))
+            
+            # Тотал > 2.5
+            over_odds = real_odds.get("over_2_5", 1.85)
+            bet_types.append(("over_2_5", over_odds, "Тотал > 2.5"))
+            
+            # Тотал < 2.5
+            under_odds = real_odds.get("under_2_5", 2.0)
+            bet_types.append(("under_2_5", under_odds, "Тотал < 2.5"))
+            
+            # Победа хозяев
+            home_win_odds = real_odds.get("home_win", 2.1)
+            bet_types.append(("home_win", home_win_odds, "Победа хозяев"))
+            
+            # Победа гостей
+            away_win_odds = real_odds.get("away_win", 3.5)
+            bet_types.append(("away_win", away_win_odds, "Победа гостей"))
+            
+            # Ничья
+            draw_odds = real_odds.get("draw", 3.2)
+            bet_types.append(("draw", draw_odds, "Ничья"))
+            
+            # 1Х (хозяева не проиграют)
+            if draw_odds and home_win_odds:
+                home_or_draw_odds = 1 / ((1 / home_win_odds) + (1 / draw_odds))
+                bet_types.append(("home_or_draw", home_or_draw_odds, "1Х"))
+            
+            # 2Х (гости не проиграют)
+            if draw_odds and away_win_odds:
+                away_or_draw_odds = 1 / ((1 / away_win_odds) + (1 / draw_odds))
+                bet_types.append(("away_or_draw", away_or_draw_odds, "2Х"))
+            
+            for bet_type, odds, label in bet_types:
                 prob = probs.get(bet_type, 0)
                 if prob < 0.1 or prob > 0.99:
                     continue
-                ev = (prob * default_odds) - 1
+                ev = (prob * odds) - 1
                 if ev > best_ev:
                     best_ev = ev
                     stake = bank * 0.05
@@ -610,7 +685,8 @@ def find_best_bet(matches):
                         "fixture_id": fixture_id,
                         "bet": label,
                         "bet_type": bet_type,
-                        "odds": default_odds,
+                        "odds": round(odds, 2),
+                        "real_odds": real_odds,
                         "prob": round(prob * 100, 1),
                         "ev": round(ev * 100, 1),
                         "stake": round(stake, 2),
@@ -762,6 +838,7 @@ def webhook():
             if bet:
                 factors = bet.get("factors", {})
                 ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+                real_odds = bet.get("real_odds", {})
                 
                 injuries_info = ""
                 if factors.get("home_injuries_list"):
@@ -774,6 +851,13 @@ def webhook():
                     scorers_info += f"\n⚽ Лучший бомбардир хозяев: {factors['home_scorers'][0]['name']} ({factors['home_scorers'][0]['goals']} голов)"
                 if factors.get("away_scorers"):
                     scorers_info += f"\n⚽ Лучший бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
+                
+                real_odds_info = ""
+                if real_odds:
+                    real_odds_info = f"""📊 <b>РЕАЛЬНЫЕ КЭФЫ:</b>
+ОЗ - ДА: {real_odds.get('btts_yes', '—')}  |  ОЗ - НЕТ: {real_odds.get('btts_no', '—')}
+Тотал > 2.5: {real_odds.get('over_2_5', '—')}  |  Тотал < 2.5: {real_odds.get('under_2_5', '—')}
+П1: {real_odds.get('home_win', '—')}  |  X: {real_odds.get('draw', '—')}  |  П2: {real_odds.get('away_win', '—')}"""
                 
                 settings_status = f"""
 ⚙️ <b>Активные слои:</b>
@@ -797,6 +881,8 @@ def webhook():
 
 📊 xG: {bet['home_xg']} : {bet['away_xg']} (сырые: {bet['raw_home_xg']} : {bet['raw_away_xg']})
 👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
+
+{real_odds_info}
 
 📋 <b>КЛЮЧЕВЫЕ ФАКТОРЫ:</b>
 📈 Форма хозяев: {factors.get('home_form', 0.5)*100:.0f}%
@@ -823,6 +909,11 @@ def webhook():
             if bet:
                 factors = bet.get("factors", {})
                 ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
+                real_odds = bet.get("real_odds", {})
+                
+                real_odds_info = ""
+                if real_odds:
+                    real_odds_info = f"\n📊 Реальные кэфы: ОЗ {real_odds.get('btts_yes', '—')} | Тотал > 2.5 {real_odds.get('over_2_5', '—')}"
                 
                 msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ НА ЗАВТРА</b>
 
@@ -833,7 +924,7 @@ def webhook():
 📈 КЭФ: {bet['odds']}
 💰 РАЗМЕР: {bet['stake']}$ (5% банка)
 📊 УВЕРЕННОСТЬ: {bet['prob']}%
-📈 EV: <b>{bet['ev']}%</b>
+📈 EV: <b>{bet['ev']}%</b>{real_odds_info}
 
 📊 xG: {bet['home_xg']} : {bet['away_xg']}
 
@@ -899,9 +990,6 @@ def webhook():
                 if matches:
                     bet = find_best_bet(matches)
                     if bet:
-                        factors = bet.get("factors", {})
-                        ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
-                        
                         msg = f"""🔥 <b>ЛУЧШАЯ СТАВКА В ЛИГЕ</b>
 
 🏟️ {bet['home']} vs {bet['away']}
@@ -1005,7 +1093,7 @@ PSY-фактор: {'✅ Вкл' if SETTINGS['psy_factor'] else '❌ Выкл'}
 
 @app.route('/', methods=['GET'])
 def index():
-    return "Quantum Bot v9.0 Ultimate is running!"
+    return "Quantum Bot v9.0 Ultimate with Real Odds is running!"
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
