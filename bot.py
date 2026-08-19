@@ -677,7 +677,7 @@ class OddsMonitor:
         return None
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 8. УВЕДОМЛЕНИЯ О СОБЫТИЯХ (ОБНОВЛЕНО)
+# 8. УВЕДОМЛЕНИЯ О СОБЫТИЯХ
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 class EventNotifier:
@@ -830,7 +830,7 @@ def get_detailed_statistics():
     return msg
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ПОИСК ЛУЧШЕЙ СТАВКИ
+# ПОИСК ЛУЧШЕЙ СТАВКИ (С ПОРОГОМ EV > 10%)
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 def find_best_bet(matches):
@@ -880,7 +880,8 @@ def find_best_bet(matches):
                     continue
                 
                 ev = (prob * default_odds) - 1
-                if ev > best_ev and ev > 0.03:
+                # ===== ПОРОГ EV > 10% (0.10) =====
+                if ev > best_ev and ev > 0.10:
                     stake = calculate_kelly_stake(prob, default_odds, bank)
                     
                     # Проверка RiskManager
@@ -994,16 +995,20 @@ def send_telegram(text):
         pass
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ (ДОБАВЛЕНО)
+# ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ (EV > 10%)
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 last_notified_bets = {}
 
 def send_bet_notification(bet):
-    """Отправляет уведомление о новой валуйной ставке"""
+    """Отправляет уведомление о новой валуйной ставке (только если EV > 10%)"""
     global last_notified_bets
     
     if not bet:
+        return
+    
+    # ===== ПРОВЕРКА: ОТПРАВЛЯТЬ ТОЛЬКО ЕСЛИ EV > 10% =====
+    if bet['ev'] < 10:
         return
     
     key = f"{bet['fixture_id']}_{bet['bet_type']}"
@@ -1028,7 +1033,7 @@ def send_bet_notification(bet):
         scorers_info += f"\n⚽ Бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
     
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
-    msg = f"""🔥 <b>НОВАЯ ВАЛУЙНАЯ СТАВКА!</b>
+    msg = f"""🔥 <b>НОВАЯ ВАЛУЙНАЯ СТАВКА! (EV > 10%)</b>
 
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
@@ -1053,7 +1058,7 @@ def send_bet_notification(bet):
     send_telegram_with_buttons(msg, bet_id)
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ФОНОВОЕ ОБНОВЛЕНИЕ (ОБНОВЛЕНО - КАЖДЫЙ ЧАС)
+# ФОНОВОЕ ОБНОВЛЕНИЕ (КАЖДЫЙ ЧАС, EV > 10%)
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 def scheduled_update():
@@ -1069,11 +1074,11 @@ def scheduled_update():
                 train_model()
                 
                 if bet:
-                    # Отправляем уведомление о новой ставке
+                    # Отправляем уведомление о новой ставке (только EV > 10%)
                     send_bet_notification(bet)
                     logger.info(f"✅ Найдена ставка: {bet['home']} vs {bet['away']} | EV: {bet['ev']}%")
                 else:
-                    logger.info("❌ Ставок не найдено")
+                    logger.info("❌ Ставок с EV > 10% не найдено")
             
             time.sleep(60)
         except Exception as e:
@@ -1147,9 +1152,9 @@ def webhook():
                 return "ok"
             
             if text == '/start':
-                send_telegram("""🚀 Quantum Betting Bot v10
+                send_telegram("""🚀 Quantum Betting Bot v10 (EV > 10%)
 
-/today - ЛУЧШАЯ ставка
+/today - ЛУЧШАЯ ставка (EV > 10%)
 /bank - Банк + риск
 /stats - Детальная статистика
 /export - Экспорт CSV
@@ -1187,7 +1192,7 @@ def webhook():
                         scorers_info += f"\n⚽ Бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
                     
                     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
-                    msg = f"""🔥 <b>ЛУЧШАЯ СТАВКА</b>
+                    msg = f"""🔥 <b>ЛУЧШАЯ СТАВКА (EV > 10%)</b>
 
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
@@ -1211,7 +1216,7 @@ def webhook():
 {ik_reasons}"""
                     send_telegram_with_buttons(msg, bet_id)
                 else:
-                    send_telegram("❌ Ставок не найдено")
+                    send_telegram("❌ Ставок с EV > 10% не найдено")
             
             elif text == '/bank':
                 bank = load_bank()
@@ -1238,7 +1243,7 @@ ${bank:.2f}
                 bet = find_best_bet(matches)
                 save_cache({"best_bet": bet})
                 train_model()
-                send_telegram("✅ Обновлено!" if bet else "❌ Ставок нет")
+                send_telegram("✅ Обновлено!" if bet else "❌ Ставок с EV > 10% нет")
             
             elif text.startswith('/setbank'):
                 try:
@@ -1258,6 +1263,7 @@ ${bank:.2f}
 Кэфы: {'✅' if SETTINGS['odds_movement'] else '❌'}
 PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
 Нейросеть: {'✅' if SETTINGS['neural_learning'] else '❌'}
+ПОРОГ EV: <b>10%</b>
 
 /toggle [1-5] - переключить"""
                 send_telegram(status)
@@ -1274,7 +1280,7 @@ PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
                     send_telegram("❌ /toggle 1-5")
             
             elif text == '/help':
-                send_telegram("""📖 КОМАНДЫ:
+                send_telegram("""📖 КОМАНДЫ (EV > 10%):
 /today - Лучшая ставка
 /bank - Банк
 /stats - Статистика
@@ -1296,7 +1302,7 @@ PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
 
 @app.route('/', methods=['GET'])
 def index():
-    return f"🤖 Quantum Bot v10 | Банк: ${load_bank():.2f} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    return f"🤖 Quantum Bot v10 (EV > 10%) | Банк: ${load_bank():.2f} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
