@@ -88,6 +88,7 @@ SETTINGS = {
     "psy_factor": True,
     "neural_learning": True,
     "inversion_mode": False,
+    "full_mode": False,
 }
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
@@ -1268,12 +1269,13 @@ def train_model():
         save_prior(prior)
 
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ (СО ВСЕМИ ФИЧАМИ)
+# ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ (С РЕЖИМАМИ)
 # ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
 
 last_notified_bets = {}
 
 def send_bet_notification(bet):
+    """Отправляет уведомление о новой валуйной ставке (краткий/полный режим)"""
     global last_notified_bets
     
     if not bet:
@@ -1291,6 +1293,30 @@ def send_bet_notification(bet):
     factors = bet.get("factors", {})
     ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
     
+    # ===== КРАТКИЙ РЕЖИМ (ПО УМОЛЧАНИЮ) =====
+    if not SETTINGS.get("full_mode", False):
+        msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ</b>
+
+🏟️ {bet['home']} vs {bet['away']}
+🏆 {bet['league']}
+
+🎯 <b>{bet['bet']}</b>
+📈 КЭФ: {bet['odds']}
+💰 РАЗМЕР: ${bet['stake']:.2f}
+📊 УВЕРЕННОСТЬ: {bet['prob']}%
+📈 EV: <b>{bet['ev']}%</b>
+
+📊 xG: {bet['home_xg']} : {bet['away_xg']}
+
+📋 {ik_reasons[:100]}...
+
+💡 /mode - включить полный режим"""
+        
+        bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
+        send_telegram_with_buttons(msg, bet_id)
+        return
+    
+    # ===== ПОЛНЫЙ РЕЖИМ =====
     injuries_info = ""
     if factors.get("home_injuries_list"):
         injuries_info += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
@@ -1303,7 +1329,7 @@ def send_bet_notification(bet):
     if factors.get("away_scorers"):
         scorers_info += f"\n⚽ Бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
     
-    # ===== ФИЧА №2: АНАЛИЗ ДВИЖЕНИЯ КЭФОВ С ИНВЕРСИЕЙ =====
+    # Анализ кэфов
     odds_analysis = analyze_odds_with_inversion(
         bet['fixture_id'], 
         SETTINGS.get("inversion_mode", False)
@@ -1313,13 +1339,11 @@ def send_bet_notification(bet):
     if odds_analysis:
         odds_block = f"""
 📉 АНАЛИЗ ДВИЖЕНИЯ КЭФА:
-Первый кэф: {odds_analysis['first_odds']:.2f} → Текущий кэф: {odds_analysis['last_odds']:.2f}
-Изменение: {odds_analysis['change']}%
 {odds_analysis['direction']}
 💡 {odds_analysis['recommendation']}
 """
     
-    # ===== ФИЧА №8: БУКМЕКЕР VS БОТ =====
+    # Букмекер vs Бот
     bookmaker_comparison = compare_bot_vs_bookmaker(
         bet['fixture_id'], 
         bet['prob'], 
@@ -1329,44 +1353,20 @@ def send_bet_notification(bet):
     bookmaker_block = ""
     if bookmaker_comparison:
         bookmaker_block = f"""
-⚔️ БУКМЕКЕР VS БОТ
-
-📊 БУКМЕКЕР:
-Средний кэф: {bookmaker_comparison['bookmaker_odds']} → Вероятность: {bookmaker_comparison['bookmaker_prob']}%
-Количество БК: {bookmaker_comparison['bookmaker_count']}
-
-🤖 БОТ:
-Вероятность: {bookmaker_comparison['bot_prob']}%
-
-📊 РАСХОЖДЕНИЕ: {bookmaker_comparison['difference']}%
+⚔️ БУКМЕКЕР VS БОТ:
 {bookmaker_comparison['signal']}
-💡 {bookmaker_comparison['explanation']}
-🔥 {bookmaker_comparison['recommendation']}
+💡 {bookmaker_comparison['recommendation']}
 """
     
-    # ===== ФИЧА №6: ПРОГНОЗ СЧЁТА + ТОТАЛ =====
+    # Прогноз счёта
     score_prediction = predict_score(bet['home_xg'], bet['away_xg'])
-    
     score_block = f"""
-🔮 ПРОГНОЗ СЧЁТА + ТОТАЛ
-
-🏆 САМЫЕ ВЕРОЯТНЫЕ СЧЁТА:
-{chr(10).join([f"{i+1}️⃣ {s} — {p}%" for i, (s, p) in enumerate(score_prediction['top_scores'])])}
-
-📈 ТОТАЛ > 2.5: {bet.get('over_2_5', 0)}%
-⚽ ОЗ: {bet.get('prob_both_score', 0)}%
+🔮 ПРОГНОЗ СЧЁТА:
+{chr(10).join([f"{s} — {p}%" for s, p in score_prediction['top_scores'][:3]])}
 """
-    
-    if score_prediction.get('exact_score_bet'):
-        score_block += f"""
-🔥 АЛЬТЕРНАТИВА: Точный счёт {score_prediction['exact_score_bet']['score']} — кэф ~{score_prediction['exact_score_bet']['odds']:.2f}
-"""
-    
-    # ===== СТАТИСТИКА РАСХОЖДЕНИЙ =====
-    divergence_stats = get_divergence_stats()
     
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
-    msg = f"""🔥 <b>НОВАЯ ВАЛУЙНАЯ СТАВКА! (EV > 5%)</b>
+    msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ (ПОЛНЫЙ РЕЖИМ)</b>
 
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
@@ -1381,9 +1381,7 @@ def send_bet_notification(bet):
 👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
 
 {odds_block}
-
 {bookmaker_block}
-
 {score_block}
 
 📋 <b>ФАКТОРЫ:</b>
@@ -1395,7 +1393,7 @@ def send_bet_notification(bet):
 🧠 <b>СУПЕР-СЛОЙ:</b>
 {ik_reasons}
 
-📊 {divergence_stats}"""
+💡 /mode - выключить полный режим"""
     
     send_telegram_with_buttons(msg, bet_id)
 
@@ -1453,7 +1451,6 @@ def webhook():
                     bet['result'] = result
                     bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
-                    # Обновляем статистику расхождений
                     if 'divergence' in bet:
                         update_divergence_stats(bet, result)
                     
@@ -1489,17 +1486,18 @@ def webhook():
                 return "ok"
             
             if text == '/start':
-                send_telegram("""🚀 Quantum Betting Bot v10 (EV > 5%)
+                send_telegram("""🚀 Quantum Betting Bot v10
 
-/today - ЛУЧШАЯ ставка (EV > 5%)
+/today - ЛУЧШАЯ ставка
 /bank - Банк + риск
-/stats - Детальная статистика
+/stats - Статистика
 /export - Экспорт CSV
-/update - Обновить кеш
+/update - Обновить
 /risk - Риск-менеджер
-/setbank 1500 - Установить банк
+/setbank 1500 - Банк
 /settings - Настройки
 /inversion - Вкл/Выкл инверсию
+/mode - Краткий/Полный режим
 /help - Помощь""")
             
             elif text == '/today':
@@ -1514,107 +1512,18 @@ def webhook():
                     train_model()
                 
                 if bet:
-                    factors = bet.get("factors", {})
-                    ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
-                    
-                    injuries_info = ""
-                    if factors.get("home_injuries_list"):
-                        injuries_info += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
-                    if factors.get("away_injuries_list"):
-                        injuries_info += f"\n🏥 Травмы гостей: {', '.join(factors['away_injuries_list'][:3])}"
-                    
-                    scorers_info = ""
-                    if factors.get("home_scorers"):
-                        scorers_info += f"\n⚽ Бомбардир хозяев: {factors['home_scorers'][0]['name']} ({factors['home_scorers'][0]['goals']} голов)"
-                    if factors.get("away_scorers"):
-                        scorers_info += f"\n⚽ Бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
-                    
-                    odds_analysis = analyze_odds_with_inversion(
-                        bet['fixture_id'], 
-                        SETTINGS.get("inversion_mode", False)
-                    )
-                    
-                    odds_block = ""
-                    if odds_analysis:
-                        odds_block = f"""
-📉 АНАЛИЗ ДВИЖЕНИЯ КЭФА:
-Первый кэф: {odds_analysis['first_odds']:.2f} → Текущий кэф: {odds_analysis['last_odds']:.2f}
-Изменение: {odds_analysis['change']}%
-{odds_analysis['direction']}
-💡 {odds_analysis['recommendation']}
-"""
-                    
-                    bookmaker_comparison = compare_bot_vs_bookmaker(
-                        bet['fixture_id'], 
-                        bet['prob'], 
-                        bet['bet_type']
-                    )
-                    
-                    bookmaker_block = ""
-                    if bookmaker_comparison:
-                        bookmaker_block = f"""
-⚔️ БУКМЕКЕР VS БОТ
-
-📊 БУКМЕКЕР: {bookmaker_comparison['bookmaker_odds']} → {bookmaker_comparison['bookmaker_prob']}%
-🤖 БОТ: {bookmaker_comparison['bot_prob']}%
-📊 РАСХОЖДЕНИЕ: {bookmaker_comparison['difference']}%
-{bookmaker_comparison['signal']}
-💡 {bookmaker_comparison['recommendation']}
-"""
-                    
-                    score_prediction = predict_score(bet['home_xg'], bet['away_xg'])
-                    
-                    score_block = f"""
-🔮 ПРОГНОЗ СЧЁТА + ТОТАЛ
-
-🏆 САМЫЕ ВЕРОЯТНЫЕ СЧЁТА:
-{chr(10).join([f"{i+1}️⃣ {s} — {p}%" for i, (s, p) in enumerate(score_prediction['top_scores'])])}
-
-📈 ТОТАЛ > 2.5: {bet.get('over_2_5', 0)}%
-⚽ ОЗ: {bet.get('prob_both_score', 0)}%
-"""
-                    
-                    if score_prediction.get('exact_score_bet'):
-                        score_block += f"""
-🔥 АЛЬТЕРНАТИВА: Точный счёт {score_prediction['exact_score_bet']['score']} — кэф ~{score_prediction['exact_score_bet']['odds']:.2f}
-"""
-                    
-                    bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
-                    msg = f"""🔥 <b>ЛУЧШАЯ СТАВКА (EV > 5%)</b>
-
-🏟️ {bet['home']} vs {bet['away']}
-🏆 {bet['league']}
-
-🎯 <b>{bet['bet']}</b>
-📈 КЭФ: {bet['odds']}
-💰 СТАВКА: ${bet['stake']:.2f}
-📊 УВЕРЕННОСТЬ: {bet['prob']}%
-📈 EV: <b>{bet['ev']}%</b>
-
-📊 xG: {bet['home_xg']} : {bet['away_xg']}
-👨‍⚖️ Судья: {bet.get('referee', 'неизвестен')}
-
-{odds_block}
-
-{bookmaker_block}
-
-{score_block}
-
-📋 <b>ФАКТОРЫ:</b>
-📈 Форма хозяев: {factors.get('home_form', 0.5)*100:.0f}%
-📈 Форма гостей: {factors.get('away_form', 0.5)*100:.0f}%
-{injuries_info}
-{scorers_info}
-
-🧠 <b>СУПЕР-СЛОЙ:</b>
-{ik_reasons}"""
-                    send_telegram_with_buttons(msg, bet_id)
+                    send_bet_notification(bet)
                 else:
                     send_telegram("❌ Ставок с EV > 5% не найдено")
             
+            elif text == '/mode':
+                SETTINGS['full_mode'] = not SETTINGS['full_mode']
+                mode = "ПОЛНЫЙ" if SETTINGS['full_mode'] else "КРАТКИЙ"
+                send_telegram(f"📋 Режим: {mode}")
+            
             elif text == '/inversion':
                 SETTINGS['inversion_mode'] = not SETTINGS['inversion_mode']
-                status = "ВКЛЮЧЕНА 🔀" if SETTINGS['inversion_mode'] else "ВЫКЛЮЧЕНА 📊"
+                status = "ВКЛЮЧЕНА" if SETTINGS['inversion_mode'] else "ВЫКЛЮЧЕНА"
                 send_telegram(f"🔄 Инверсия {status}!")
             
             elif text == '/bank':
@@ -1663,11 +1572,13 @@ ${bank:.2f}
 PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
 Нейросеть: {'✅' if SETTINGS['neural_learning'] else '❌'}
 ПОРОГ EV: <b>5%</b>
-ПРОВЕРКА: <b>каждые 6 часов</b>
+ПРОВЕРКА: <b>6 часов</b>
 ИНВЕРСИЯ: {'🔀 Вкл' if SETTINGS['inversion_mode'] else '📊 Выкл'}
+РЕЖИМ: {'📋 Полный' if SETTINGS['full_mode'] else '📄 Краткий'}
 
-/toggle [1-5] - переключить слой
-/inversion - вкл/выкл инверсию"""
+/toggle [1-5] - слой
+/inversion - инверсия
+/mode - режим"""
                 send_telegram(status)
             
             elif text.startswith('/toggle'):
@@ -1686,7 +1597,7 @@ PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
                 send_telegram(stats)
             
             elif text == '/help':
-                send_telegram("""📖 КОМАНДЫ (EV > 5%):
+                send_telegram("""📖 КОМАНДЫ:
 
 /today - Лучшая ставка
 /bank - Банк
@@ -1698,6 +1609,7 @@ PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
 /settings - Настройки
 /toggle 1 - Слой
 /inversion - Вкл/Выкл инверсию
+/mode - Краткий/Полный режим
 /divergence - Статистика расхождений
 /help - Помощь""")
             
@@ -1711,7 +1623,8 @@ PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
 
 @app.route('/', methods=['GET'])
 def index():
-    return f"🤖 Quantum Bot v10 (EV > 5%) | Инверсия: {'Вкл' if SETTINGS.get('inversion_mode') else 'Выкл'} | Банк: ${load_bank():.2f} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    mode = "Полный" if SETTINGS.get('full_mode') else "Краткий"
+    return f"🤖 Quantum Bot v10 | Режим: {mode} | Инверсия: {'Вкл' if SETTINGS.get('inversion_mode') else 'Выкл'} | Банк: ${load_bank():.2f} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=10000)
