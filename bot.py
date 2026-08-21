@@ -199,7 +199,7 @@ def send_bet_notification(bet):
     if not bet:
         return
 
-    # ВРЕМЕННО ОТКЛЮЧАЕМ ПОРОГ, ЧТОБЫ УВИДЕТЬ РЕАЛЬНЫЕ СТАВКИ
+    # ПОРОГ ОТКЛЮЧЕН — БУДЕТ ПОКАЗЫВАТЬ ЛЮБЫЕ СТАВКИ
     # if bet['ev'] < 5:
     #     return
 
@@ -314,7 +314,7 @@ def webhook():
                         send_bet_notification(bet)
                         send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
                     else:
-                        send_telegram("❌ Ставок с EV > 5% нет")
+                        send_telegram("❌ Валуйных ставок не найдено")
                 else:
                     send_telegram("⚠️ Матчей не найдено сегодня")
 
