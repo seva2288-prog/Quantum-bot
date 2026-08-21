@@ -1,4 +1,4 @@
-from functions import *
+from function import *
 from flask import Flask, request
 import requests
 import math
