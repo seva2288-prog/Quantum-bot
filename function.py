@@ -35,7 +35,7 @@ def get_weather_by_city(city_name):
                 
                 weather = current.get("weather", [{}])[0].get("main", "Clear")
                 description = current.get("weather", [{}])[0].get("description", "")
-                temp = current.get("temp", {}).get("day", 20) if "day" in current.get("temp", {}) else current.get("temp", 20)
+                temp = current.get("temp", {}).get("day", 20)
                 
                 weather_ru = {
                     "Clear": "☀️ Ясно",
@@ -75,13 +75,13 @@ def get_weather_impact(weather_data):
     
     if weather in ["Rain", "Drizzle", "Thunderstorm"]:
         impact = 0.92
-        reason = f"🌧️ Дождь (-8%)"
+        reason = "🌧️ Дождь (-8%)"
     elif weather == "Snow":
         impact = 0.85
-        reason = f"❄️ Снег (-15%)"
+        reason = "❄️ Снег (-15%)"
     elif weather in ["Mist", "Fog", "Haze"]:
         impact = 0.90
-        reason = f"🌫️ Туман (-10%)"
+        reason = "🌫️ Туман (-10%)"
     elif wind > 10:
         impact = 0.93
         reason = f"💨 Сильный ветер ({wind:.0f} м/с) (-7%)"
@@ -93,7 +93,7 @@ def get_weather_impact(weather_data):
         reason = f"🥶 Холод ({temp:.0f}°C) (-5%)"
     elif weather in ["Rain", "Drizzle"] and wind > 8:
         impact = 0.88
-        reason = f"🌧️💨 Дождь + ветер (-12%)"
+        reason = "🌧️💨 Дождь + ветер (-12%)"
     
     return impact, reason
 
@@ -141,7 +141,7 @@ def calculate_probs(home_xg, away_xg):
     }
 
 # ================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ (ФОРМА, ТРАВМЫ, МОТИВАЦИЯ, H2H, СУДЬЯ, xG)
+# ОСТАЛЬНЫЕ ФУНКЦИИ
 # ================================================================
 
 def get_form(team_id, football_api_key):
@@ -291,7 +291,7 @@ def get_top_scorers(team_id, football_api_key):
     return []
 
 # ================================================================
-# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ (ВКЛЮЧАЯ ПОГОДУ)
+# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ
 # ================================================================
 
 def get_matches_with_factors(football_api_key):
@@ -325,9 +325,6 @@ def get_matches_with_factors(football_api_key):
                                 away_id = match["teams"]["away"]["id"]
                                 fixture_id = match["fixture"]["id"]
                                 
-                                home_motivation, home_motivation_text = get_motivation(home_id, league_id, football_api_key)
-                                away_motivation, away_motivation_text = get_motivation(away_id, league_id, football_api_key)
-                                
                                 match["factors"] = {
                                     "home_form": get_form(home_id, football_api_key),
                                     "away_form": get_form(away_id, football_api_key),
@@ -335,12 +332,10 @@ def get_matches_with_factors(football_api_key):
                                     "away_injuries": get_injuries(away_id, football_api_key)[0],
                                     "home_injuries_list": get_injuries(home_id, football_api_key)[1],
                                     "away_injuries_list": get_injuries(away_id, football_api_key)[1],
-                                    "home_motivation": home_motivation,
-                                    "away_motivation": away_motivation,
-                                    "home_motivation_text": home_motivation_text,
-                                    "away_motivation_text": away_motivation_text,
-                                    "home_rank": int(home_motivation_text.split()[0]) if home_motivation_text and home_motivation_text[0].isdigit() else 10,
-                                    "away_rank": int(away_motivation_text.split()[0]) if away_motivation_text and away_motivation_text[0].isdigit() else 10,
+                                    "home_motivation": get_motivation(home_id, league_id, football_api_key)[0],
+                                    "away_motivation": get_motivation(away_id, league_id, football_api_key)[0],
+                                    "home_motivation_text": get_motivation(home_id, league_id, football_api_key)[1],
+                                    "away_motivation_text": get_motivation(away_id, league_id, football_api_key)[1],
                                     "h2h": get_h2h(home_id, away_id, football_api_key),
                                     "referee": get_referee_style(fixture_id, football_api_key),
                                     "home_scorers": get_top_scorers(home_id, football_api_key),
@@ -356,7 +351,7 @@ def get_matches_with_factors(football_api_key):
                                         match["weather"] = weather
                                         match["weather_impact"] = impact
                                         match["weather_reason"] = reason
-                                        logger.info(f"🌤️ Погода в {city}: {weather['weather_ru']} ({temp:.0f}°C)")
+                                        logger.info(f"🌤️ Погода в {city}: {weather['weather_ru']} ({weather['temp']:.0f}°C)")
                                 
                                 match["league"]["name"] = league_name
                                 all_matches.append(match)
@@ -393,7 +388,7 @@ def get_test_matches():
     ]
 
 # ================================================================
-# ПОИСК ЛУЧШЕЙ СТАВКИ (УПРОЩЁННАЯ ВЕРСИЯ)
+# ПОИСК ЛУЧШЕЙ СТАВКИ
 # ================================================================
 
 def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notification_func):
