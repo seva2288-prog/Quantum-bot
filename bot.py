@@ -199,19 +199,20 @@ def send_bet_notification(bet):
     if not bet:
         return
 
-    # if bet['ev'] < 5:
-    #     return
-
     key = f"{bet['fixture_id']}_{bet['bet_type']}"
     if key in last_notified_bets and last_notified_bets[key] == bet['ev']:
         return
 
     last_notified_bets[key] = bet['ev']
 
+    # ===== ВРЕМЯ МАТЧА (НОВОЕ) =====
+    match_time = bet.get("match_time", "⏰ Время не указано")
+
     msg = f"""🔥 <b>ВАЛУЙНАЯ СТАВКА!</b>
 
 🏟️ {bet['home']} vs {bet['away']}
 🏆 {bet['league']}
+⏰ {match_time}
 
 🎯 <b>{bet['bet']}</b>
 📈 КЭФ: {bet['odds']}
@@ -226,7 +227,7 @@ def send_bet_notification(bet):
         w = bet['weather']
         msg += f"\n🌡️ {w['weather_ru']}, {w['temp']}°C"
 
-    # ===== БЛОК СОСТАВОВ (НОВОЕ) =====
+    # ===== СОСТАВЫ =====
     if bet.get('home_lineup') or bet.get('away_lineup'):
         msg += "\n\n👥 <b>СОСТАВЫ:</b>"
         if bet.get('home_lineup'):
@@ -247,6 +248,13 @@ def send_bet_notification(bet):
         injuries += f"\n🏥 Травмы гостей: {', '.join(factors['away_injuries_list'][:3])}"
     if injuries:
         msg += f"\n{injuries}"
+
+    # ===== ЧУТЬЁ =====
+    if bet.get('intuition') and bet['intuition'].get('reasons'):
+        reasons = bet['intuition']['reasons'][:5]
+        msg += "\n\n🧠 <b>ЧУТЬЁ:</b>"
+        for r in reasons:
+            msg += f"\n• {r}"
 
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
     send_telegram_with_buttons(msg, bet_id)
@@ -325,7 +333,7 @@ def webhook():
 /help - Помощь""")
 
             elif text == '/update':
-                send_telegram("🔄 Поиск матчей с учётом погоды и составов...")
+                send_telegram("🔄 Поиск матчей с чутьём...")
                 matches = get_matches_with_factors(FOOTBALL_API_KEY)
 
                 if matches:
