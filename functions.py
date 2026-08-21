@@ -122,26 +122,146 @@ def get_league_names():
 def get_all_leagues():
     return list(get_league_names().keys())
 
-# ===== РАСЧЁТ =====
-def poisson_prob(lam, k):
-    if lam == 0:
-        return 1 if k == 0 else 0
-    return (math.exp(-lam) * lam**k) / math.factorial(k)
+# ================================================================
+# НАША НОВАЯ ФОРМУЛА (ВМЕСТО ПУАССОНА)
+# ================================================================
 
-def calculate_probs(home_xg, away_xg):
-    max_goals = 7
-    probs = [[poisson_prob(home_xg, i) * poisson_prob(away_xg, j) for j in range(max_goals)] for i in range(max_goals)]
+def calculate_xg_advanced(home_team, away_team, match_data, football_api_key):
+    """
+    Рассчитывает xG по нашей формуле
+    """
+    
+    # 1. БАЗОВЫЙ xG
+    home_xg = 1.5
+    away_xg = 1.3
+    
+    # 2. КОРРЕКЦИЯ ДОМАШНЕГО ПОЛЯ
+    HOME_BONUS = 1.08
+    
+    # 3. ФОРМА
+    home_form = match_data.get("home_form", {}).get("ratio", 0.5)
+    away_form = match_data.get("away_form", {}).get("ratio", 0.5)
+    form_home = (home_form * 0.3) + 0.85
+    form_away = (away_form * 0.3) + 0.85
+    
+    # 4. ТРАВМЫ
+    home_injuries = match_data.get("home_injuries_list", [])
+    away_injuries = match_data.get("away_injuries_list", [])
+    injury_home = 1 - (len(home_injuries) * 0.04)
+    injury_away = 1 - (len(away_injuries) * 0.04)
+    
+    # 5. МОТИВАЦИЯ
+    home_motivation = match_data.get("home_motivation", 1.0)
+    away_motivation = match_data.get("away_motivation", 1.0)
+    
+    # 6. ПОГОДА
+    weather_impact, _ = get_weather_impact(match_data.get("weather", {}))
+    
+    # 7. ДЕРБИ
+    derby_factor = 1.0
+    if "derby" in str(match_data).lower():
+        derby_factor = 0.92
+    
+    # 8. СОСТАВ
+    home_lineup = match_data.get("home_lineup", {})
+    away_lineup = match_data.get("away_lineup", {})
+    
+    if home_lineup.get("count", 11) < 9:
+        lineup_home = 0.90
+    elif home_lineup.get("strength", 1.0) < 0.8:
+        lineup_home = 0.95
+    else:
+        lineup_home = 1.0
+    
+    if away_lineup.get("count", 11) < 9:
+        lineup_away = 0.90
+    elif away_lineup.get("strength", 1.0) < 0.8:
+        lineup_away = 0.95
+    else:
+        lineup_away = 1.0
+    
+    # 9. ИТОГОВЫЙ xG
+    home_xg = home_xg * HOME_BONUS * form_home * injury_home * home_motivation * weather_impact * derby_factor * lineup_home
+    away_xg = away_xg * form_away * injury_away * away_motivation * weather_impact * derby_factor * lineup_away
+    
+    # Ограничиваем xG
+    home_xg = max(0.3, min(home_xg, 4.5))
+    away_xg = max(0.3, min(away_xg, 4.5))
+    
+    return home_xg, away_xg
+
+def probability_goals_normal(xg):
+    """
+    Рассчитывает вероятности голов через нормальное распределение
+    """
+    import math
+    variance = xg * 0.8
+    if variance < 0.1:
+        variance = 0.1
+    
+    probs = []
+    for g in [0, 1, 2, 3, 4]:
+        prob = (1 / math.sqrt(2 * math.pi * variance)) * math.exp(-((g - xg) ** 2) / (2 * variance))
+        probs.append(prob)
+    
+    # Нормализуем
+    total = sum(probs)
+    if total > 0:
+        probs = [p / total for p in probs]
+    
+    return probs
+
+def calculate_probs_advanced(home_xg, away_xg):
+    """
+    Рассчитывает вероятности исходов по нашей формуле
+    """
+    home_probs = probability_goals_normal(home_xg)
+    away_probs = probability_goals_normal(away_xg)
+    
+    # Вероятность, что команды забьют
+    home_score = 1 - home_probs[0]  # не 0 голов
+    away_score = 1 - away_probs[0]
+    
+    btts = home_score * away_score
+    
+    # Тотал > 2.5
+    over_2_5 = 0
+    for i, hp in enumerate(home_probs):
+        for j, ap in enumerate(away_probs):
+            if i + j > 2.5:
+                over_2_5 += hp * ap
+    
+    # Победа хозяев
+    home_win = 0
+    for i, hp in enumerate(home_probs):
+        for j, ap in enumerate(away_probs):
+            if i > j:
+                home_win += hp * ap
+    
+    # Победа гостей
+    away_win = 0
+    for i, hp in enumerate(home_probs):
+        for j, ap in enumerate(away_probs):
+            if i < j:
+                away_win += hp * ap
+    
+    # 1Х
+    home_or_draw = home_win + sum(home_probs[i] * away_probs[i] for i in range(len(home_probs)))
+    
+    # 2Х
+    away_or_draw = away_win + sum(home_probs[i] * away_probs[i] for i in range(len(home_probs)))
+    
     return {
-        "btts": sum(probs[i][j] for i in range(1, 7) for j in range(1, 7)),
-        "over_2_5": sum(probs[i][j] for i in range(7) for j in range(7) if i + j > 2.5),
-        "home_win": sum(probs[i][j] for i in range(7) for j in range(7) if i > j),
-        "away_win": sum(probs[i][j] for i in range(7) for j in range(7) if i < j),
-        "home_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i >= j),
-        "away_or_draw": sum(probs[i][j] for i in range(7) for j in range(7) if i <= j),
+        "btts": btts,
+        "over_2_5": over_2_5,
+        "home_win": home_win,
+        "away_win": away_win,
+        "home_or_draw": home_or_draw,
+        "away_or_draw": away_or_draw,
     }
 
 # ================================================================
-# ФУНКЦИИ ДЛЯ ФУТБОЛА
+# ОСТАЛЬНЫЕ ФУНКЦИИ
 # ================================================================
 
 def get_form(team_id, football_api_key):
@@ -202,9 +322,9 @@ def get_motivation(team_id, league_id, football_api_key):
                             pos = team["rank"]
                             total = len(standing)
                             if pos <= 4:
-                                return 1.10, f"{pos}-е место (еврокубки)"
+                                return 1.12, f"{pos}-е место (еврокубки)"
                             elif pos >= total - 3:
-                                return 1.10, f"{pos}-е место (выживание)"
+                                return 1.12, f"{pos}-е место (выживание)"
                             else:
                                 return 1.0, f"{pos}-е место"
     except:
@@ -290,15 +410,7 @@ def get_top_scorers(team_id, football_api_key):
         pass
     return []
 
-# ================================================================
-# НОВАЯ ФУНКЦИЯ: ПОЛУЧЕНИЕ СОСТАВОВ
-# ================================================================
-
 def get_team_lineup(fixture_id, team_id, football_api_key):
-    """
-    Получает стартовый состав команды на матч
-    Возвращает список игроков и оценку силы состава
-    """
     try:
         url = f"https://v3.football.api-sports.io/fixtures/lineups?fixture={fixture_id}"
         headers = {"x-rapidapi-key": football_api_key}
@@ -312,7 +424,6 @@ def get_team_lineup(fixture_id, team_id, football_api_key):
                     for player in lineup.get("startXI", []):
                         players.append(player["player"]["name"])
                     
-                    # Оценка силы состава (по количеству игроков и их позициям)
                     strength = len(players) / 11
                     
                     return {
@@ -327,7 +438,7 @@ def get_team_lineup(fixture_id, team_id, football_api_key):
     return None
 
 # ================================================================
-# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ (ВКЛЮЧАЯ СОСТАВЫ)
+# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ
 # ================================================================
 
 def get_matches_with_factors(football_api_key):
@@ -361,6 +472,9 @@ def get_matches_with_factors(football_api_key):
                                 away_id = match["teams"]["away"]["id"]
                                 fixture_id = match["fixture"]["id"]
                                 
+                                home_motivation, home_motivation_text = get_motivation(home_id, league_id, football_api_key)
+                                away_motivation, away_motivation_text = get_motivation(away_id, league_id, football_api_key)
+                                
                                 match["factors"] = {
                                     "home_form": get_form(home_id, football_api_key),
                                     "away_form": get_form(away_id, football_api_key),
@@ -368,17 +482,17 @@ def get_matches_with_factors(football_api_key):
                                     "away_injuries": get_injuries(away_id, football_api_key)[0],
                                     "home_injuries_list": get_injuries(home_id, football_api_key)[1],
                                     "away_injuries_list": get_injuries(away_id, football_api_key)[1],
-                                    "home_motivation": get_motivation(home_id, league_id, football_api_key)[0],
-                                    "away_motivation": get_motivation(away_id, league_id, football_api_key)[0],
-                                    "home_motivation_text": get_motivation(home_id, league_id, football_api_key)[1],
-                                    "away_motivation_text": get_motivation(away_id, league_id, football_api_key)[1],
+                                    "home_motivation": home_motivation,
+                                    "away_motivation": away_motivation,
+                                    "home_motivation_text": home_motivation_text,
+                                    "away_motivation_text": away_motivation_text,
                                     "h2h": get_h2h(home_id, away_id, football_api_key),
                                     "referee": get_referee_style(fixture_id, football_api_key),
                                     "home_scorers": get_top_scorers(home_id, football_api_key),
                                     "away_scorers": get_top_scorers(away_id, football_api_key),
                                 }
                                 
-                                # ===== ПОЛУЧАЕМ СОСТАВЫ =====
+                                # ===== СОСТАВЫ =====
                                 home_lineup = get_team_lineup(fixture_id, home_id, football_api_key)
                                 away_lineup = get_team_lineup(fixture_id, away_id, football_api_key)
                                 
@@ -405,9 +519,9 @@ def get_matches_with_factors(football_api_key):
                                             match["weather"] = None
                                             match["weather_impact"] = 1.0
                                             match["weather_reason"] = "☀️ Погода неизвестна"
-                                            logger.info(f"⚠️ Погода для {city} не получена, использую нейтральное значение")
+                                            logger.info(f"⚠️ Погода для {city} не получена")
                                     except Exception as e:
-                                        logger.warning(f"⚠️ Ошибка погоды для {city}: {e}")
+                                        logger.warning(f"⚠️ Ошибка погоды: {e}")
                                         match["weather"] = None
                                         match["weather_impact"] = 1.0
                                         match["weather_reason"] = "☀️ Погода неизвестна"
@@ -436,22 +550,7 @@ def get_matches_with_factors(football_api_key):
     return all_matches
 
 # ================================================================
-# ТЕСТОВЫЕ ДАННЫЕ (НЕ ИСПОЛЬЗУЮТСЯ)
-# ================================================================
-
-def get_test_matches():
-    return [
-        {"fixture": {"id": 1, "status": {"short": "NS"}}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Chelsea"}}, "league": {"name": "АПЛ"}},
-        {"fixture": {"id": 2, "status": {"short": "NS"}}, "teams": {"home": {"name": "Barcelona"}, "away": {"name": "Real Madrid"}}, "league": {"name": "Ла Лига"}},
-        {"fixture": {"id": 3, "status": {"short": "NS"}}, "teams": {"home": {"name": "Bayern Munich"}, "away": {"name": "Dortmund"}}, "league": {"name": "Бундеслига"}},
-        {"fixture": {"id": 4, "status": {"short": "NS"}}, "teams": {"home": {"name": "AC Milan"}, "away": {"name": "Inter"}}, "league": {"name": "Серия А"}},
-        {"fixture": {"id": 5, "status": {"short": "NS"}}, "teams": {"home": {"name": "PSG"}, "away": {"name": "Marseille"}}, "league": {"name": "Лига 1"}},
-        {"fixture": {"id": 6, "status": {"short": "NS"}}, "teams": {"home": {"name": "Flamengo"}, "away": {"name": "Palmeiras"}}, "league": {"name": "Бразилейрао"}},
-        {"fixture": {"id": 7, "status": {"short": "NS"}}, "teams": {"home": {"name": "River Plate"}, "away": {"name": "Boca Juniors"}}, "league": {"name": "Аргентина"}},
-    ]
-
-# ================================================================
-# ПОИСК ЛУЧШЕЙ СТАВКИ (С УЧЁТОМ СОСТАВОВ)
+# ПОИСК ЛУЧШЕЙ СТАВКИ (С НОВОЙ ФОРМУЛОЙ)
 # ================================================================
 
 def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notification_func):
@@ -467,36 +566,13 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
             
-            home_xg = 1.5
-            away_xg = 1.3
+            # ===== РАССЧИТЫВАЕМ xG ПО НОВОЙ ФОРМУЛЕ =====
+            home_xg, away_xg = calculate_xg_advanced(home, away, factors, football_api_key)
             
-            # ===== УЧЁТ СОСТАВОВ =====
-            home_lineup = factors.get("home_lineup")
-            away_lineup = factors.get("away_lineup")
+            # ===== РАССЧИТЫВАЕМ ВЕРОЯТНОСТИ =====
+            probs = calculate_probs_advanced(home_xg, away_xg)
             
-            if home_lineup:
-                # Если в составе меньше 9 игроков — штраф
-                if home_lineup["count"] < 9:
-                    home_xg *= 0.90
-                    logger.info(f"⚠️ У хозяев неполный состав ({home_lineup['count']} игроков) -10%")
-                elif home_lineup["strength"] < 0.8:
-                    home_xg *= 0.95
-                    logger.info(f"⚠️ Слабый состав хозяев ({home_lineup['strength']*100:.0f}%) -5%")
-            
-            if away_lineup:
-                if away_lineup["count"] < 9:
-                    away_xg *= 0.90
-                    logger.info(f"⚠️ У гостей неполный состав ({away_lineup['count']} игроков) -10%")
-                elif away_lineup["strength"] < 0.8:
-                    away_xg *= 0.95
-                    logger.info(f"⚠️ Слабый состав гостей ({away_lineup['strength']*100:.0f}%) -5%")
-            
-            # ===== УЧЁТ ПОГОДЫ =====
-            if match.get("weather_impact"):
-                home_xg *= match["weather_impact"]
-                away_xg *= match["weather_impact"]
-            
-            # ===== ПОЛУЧАЕМ xG ИЗ API =====
+            # ===== ПЫТАЕМСЯ ПОЛУЧИТЬ xG ИЗ API =====
             try:
                 stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
                 headers = {"x-rapidapi-key": football_api_key}
@@ -507,17 +583,22 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                         if stat["team"]["name"] == home:
                             for item in stat.get("statistics", []):
                                 if item["type"] == "expected_goals" and item.get("value"):
-                                    home_xg = float(item["value"])
+                                    home_xg_api = float(item["value"])
+                                    # Смешиваем с нашей формулой (50/50)
+                                    home_xg = home_xg * 0.5 + home_xg_api * 0.5
                         elif stat["team"]["name"] == away:
                             for item in stat.get("statistics", []):
                                 if item["type"] == "expected_goals" and item.get("value"):
-                                    away_xg = float(item["value"])
+                                    away_xg_api = float(item["value"])
+                                    away_xg = away_xg * 0.5 + away_xg_api * 0.5
             except:
                 pass
             
-            home_xg = max(0.3, min(home_xg, 4.0))
-            away_xg = max(0.3, min(away_xg, 4.0))
-            probs = calculate_probs(home_xg, away_xg)
+            home_xg = max(0.3, min(home_xg, 4.5))
+            away_xg = max(0.3, min(away_xg, 4.5))
+            
+            # Пересчитываем вероятности с обновлённым xG
+            probs = calculate_probs_advanced(home_xg, away_xg)
             
             bet_types = [
                 ("btts", 1.85, "ОЗ - ДА"),
@@ -553,8 +634,8 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                         "weather": match.get("weather"),
                         "weather_impact": match.get("weather_impact", 1.0),
                         "weather_reason": match.get("weather_reason", "☀️ Без погоды"),
-                        "home_lineup": home_lineup,
-                        "away_lineup": away_lineup,
+                        "home_lineup": factors.get("home_lineup"),
+                        "away_lineup": factors.get("away_lineup"),
                         "factors": factors,
                     }
         except Exception as e:
