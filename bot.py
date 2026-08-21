@@ -6,30 +6,21 @@ import os
 from datetime import datetime, timedelta
 import threading
 import time
-import re
 import logging
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Optional, Tuple, Any
 from dotenv import load_dotenv
 
-# Загрузка переменных окружения
 load_dotenv()
 
 app = Flask(__name__)
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 1. БЕЗОПАСНОСТЬ - Ключи из переменных окружения
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== КОНФИГ =====
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74")
-FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "3e01a7f37589da560393ad459bfd61ff")
-WEATHER_API_KEY = os.getenv('WEATHER_API_KEY', "7f0cfaed346b0fe364815ab65d627af2")
+FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "3e0a7f37589d3a560393ad45b4d5ff")
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', "228801334")
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 9. ЛОГИРОВАНИЕ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ЛОГИ =====
 def setup_logging():
     os.makedirs('logs', exist_ok=True)
     logger = logging.getLogger('betting_bot')
@@ -46,19 +37,22 @@ def setup_logging():
     return logger
 
 logger = setup_logging()
+logger.info("🚀 Бот запускается...")
+logger.info("⚠️ АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ОТКЛЮЧЕНО НАВСЕГДА!")
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ЛИГИ И НАСТРОЙКИ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ВСЕ ЛИГИ =====
 LEAGUES = [
     39, 140, 78, 135, 61, 40, 141, 79, 136, 62,
-    2, 3, 848, 88, 89, 94, 203, 197, 345, 106,
-    207, 90, 242, 272, 276, 283, 288, 253, 289,
-    290, 291, 179, 218, 240, 1, 12, 45, 46, 47, 48, 50,
-    71, 128, 169, 172, 176, 138, 139, 144, 148, 149,
-    142, 137, 140, 250, 251, 252, 260, 261, 262,
-    263, 264, 265, 266, 267
+    2, 3, 848,
+    88, 89, 94, 203, 197, 345, 106, 207,
+    90, 242, 272, 276, 283, 288, 253, 289, 290, 291,
+    179, 218, 240,
+    1, 12, 45, 46, 47, 48, 50,
+    71, 128, 169, 172, 176,
+    138, 139, 144, 148, 149,
+    142, 137,
+    250, 251, 252,
+    260, 261, 262, 263, 264, 265, 266, 267
 ]
 
 LEAGUE_NAMES = {
@@ -74,7 +68,7 @@ LEAGUE_NAMES = {
     46: "Кубок Германии", 47: "Кубок Италии", 48: "Кубок Франции", 50: "Кубок Лиги",
     71: "Бразилейрао", 128: "Аргентина", 169: "Уругвай", 172: "Чили", 176: "Колумбия",
     138: "J1 Лига", 139: "K Лига", 144: "Саудовская Аравия", 148: "ОАЭ", 149: "Катар",
-    142: "Liga MX", 137: "Египет", 140: "ЮАР",
+    142: "Liga MX", 137: "Египет",
     250: "Кипр", 251: "Исландия", 252: "Финляндия",
     260: "Албания", 261: "Македония", 262: "Грузия",
     263: "Армения", 264: "Азербайджан", 265: "Казахстан",
@@ -82,26 +76,34 @@ LEAGUE_NAMES = {
 }
 
 SETTINGS = {
+    "full_mode": False,
+    "ev_threshold": 2.0,
     "improved_form": True,
     "referee": True,
     "odds_movement": True,
     "psy_factor": True,
     "neural_learning": True,
     "inversion_mode": False,
-    "full_mode": False,
 }
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ФАЙЛЫ ДЛЯ ХРАНЕНИЯ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ФАЙЛЫ =====
 CACHE_FILE = "cache.json"
 HISTORY_FILE = "history.json"
-WEIGHTS_FILE = "weights.json"
 BANK_FILE = "bank.json"
+WEIGHTS_FILE = "weights.json"
 ODDS_HISTORY_FILE = "odds_history.json"
 PRIOR_FILE = "prior.json"
 DIVERGENCE_FILE = "divergence.json"
+
+def load_bank():
+    if os.path.exists(BANK_FILE):
+        with open(BANK_FILE, "r") as f:
+            return json.load(f).get("bank", 1000)
+    return 1000
+
+def save_bank(bank):
+    with open(BANK_FILE, "w") as f:
+        json.dump({"bank": bank, "updated": datetime.now().isoformat()}, f)
 
 def load_history():
     if os.path.exists(HISTORY_FILE):
@@ -134,16 +136,6 @@ def save_weights(weights):
     with open(WEIGHTS_FILE, "w") as f:
         json.dump(weights, f, indent=2)
 
-def load_bank():
-    if os.path.exists(BANK_FILE):
-        with open(BANK_FILE, "r") as f:
-            return json.load(f).get("bank", 1000)
-    return 1000
-
-def save_bank(bank):
-    with open(BANK_FILE, "w") as f:
-        json.dump({"bank": bank, "updated": datetime.now().isoformat()}, f)
-
 def load_odds_history():
     if os.path.exists(ODDS_HISTORY_FILE):
         with open(ODDS_HISTORY_FILE, "r") as f:
@@ -174,6 +166,15 @@ def save_divergence(data):
     with open(DIVERGENCE_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
+# ===== ОТПРАВКА =====
+def send_telegram(text):
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
+        requests.post(url, json=data, timeout=10)
+    except Exception as e:
+        logger.error(f"Send error: {e}")
+
 def send_telegram_with_buttons(text, bet_id):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -190,21 +191,10 @@ def send_telegram_with_buttons(text, bet_id):
             }
         }
         requests.post(url, json=data, timeout=10)
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"Send buttons error: {e}")
 
-def send_telegram(text):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": ADMIN_CHAT_ID, "text": text, "parse_mode": "HTML"}
-        requests.post(url, json=data, timeout=10)
-    except:
-        pass
-
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# РАСЧЁТ ВЕРОЯТНОСТЕЙ (Пуассон)
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== РАСЧЁТ ВЕРОЯТНОСТЕЙ (Пуассон) =====
 def poisson_prob(lam, k):
     if lam == 0:
         return 1 if k == 0 else 0
@@ -228,10 +218,7 @@ def odds_to_probability(odds):
         return 0
     return round((1 / odds) * 100, 1)
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 3. УПРАВЛЕНИЕ РИСКАМИ (RiskManager)
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== УПРАВЛЕНИЕ РИСКАМИ (RiskManager) =====
 class RiskManager:
     def __init__(self):
         self.daily_loss = 0
@@ -286,10 +273,7 @@ class RiskManager:
 
 risk_manager = RiskManager()
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 2. КРИТЕРИЙ КЕЛЛИ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== КРИТЕРИЙ КЕЛЛИ =====
 def calculate_kelly_stake(prob: float, odds: float, bank: float, max_fraction: float = 0.25) -> float:
     if odds <= 1 or prob <= 0 or prob >= 1 or prob < 0.45:
         return 0
@@ -300,10 +284,7 @@ def calculate_kelly_stake(prob: float, odds: float, bank: float, max_fraction: f
     stake = round(bank * f, 2)
     return max(stake, 0.5)
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 4. УЛУЧШЕННЫЙ АНАЛИЗ xG
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== УЛУЧШЕННЫЙ АНАЛИЗ xG =====
 def calculate_xg_with_context(match, raw_home_xg, raw_away_xg):
     factors = match.get('factors', {})
     reasons = []
@@ -351,10 +332,7 @@ def calculate_xg_with_context(match, raw_home_xg, raw_away_xg):
     
     return home_xg, away_xg, reasons
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ДОПОЛНИТЕЛЬНЫЕ СЛОИ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ДОПОЛНИТЕЛЬНЫЕ СЛОИ =====
 def apply_improved_form(home_xg, away_xg, match):
     if not SETTINGS.get("improved_form", True):
         return home_xg, away_xg, []
@@ -443,10 +421,7 @@ def update_odds_history(fixture_id, current_odds):
         history[key] = history[key][-10:]
     save_odds_history(history)
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# СУПЕР-СЛОЙ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== СУПЕР-СЛОЙ =====
 def calculate_super_ik(match, raw_home_xg, raw_away_xg):
     reasons = []
     prior = load_prior()
@@ -488,10 +463,7 @@ def calculate_super_ik(match, raw_home_xg, raw_away_xg):
     
     return home_xg, away_xg, reasons
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ПОЛУЧЕНИЕ ДАННЫХ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ПОЛУЧЕНИЕ ДАННЫХ =====
 def get_form(team_id):
     try:
         url = f"https://v3.football.api-sports.io/fixtures?team={team_id}&last=5"
@@ -670,10 +642,7 @@ def get_matches_with_factors():
             logger.error(f"get_matches_with_factors error for league {league_id}: {e}")
     return all_matches
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 5. МОНИТОРИНГ КОЭФФИЦИЕНТОВ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== МОНИТОРИНГ КОЭФФИЦИЕНТОВ =====
 def get_bookmaker_odds(fixture_id):
     try:
         url = f"https://v3.football.api-sports.io/odds?fixture={fixture_id}"
@@ -868,10 +837,7 @@ def get_divergence_stats():
 
 🔥 Если бот расходится с букмекером >5% — точность {winrate}%"""
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 6. ЭКСПОРТ СТАТИСТИКИ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ЭКСПОРТ СТАТИСТИКИ =====
 def export_statistics():
     history = load_history()
     if not history:
@@ -896,10 +862,7 @@ def export_statistics():
     except:
         return "❌ Ошибка экспорта"
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# 7. ДЕТАЛЬНАЯ СТАТИСТИКА
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ДЕТАЛЬНАЯ СТАТИСТИКА =====
 def get_detailed_statistics():
     history = load_history()
     if not history:
@@ -949,10 +912,7 @@ def get_detailed_statistics():
     
     return msg
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ФИЧА №6: ПРОГНОЗ СЧЁТА + ТОТАЛ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ПРОГНОЗ СЧЁТА + ТОТАЛ =====
 def predict_score(home_xg, away_xg):
     max_goals = 6
     score_probs = {}
@@ -986,10 +946,7 @@ def predict_score(home_xg, away_xg):
         "exact_score_bet": exact_score_bet
     }
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ПОИСК ЛУЧШЕЙ СТАВКИ (С ПОРОГОМ EV > 5%)
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
 def find_best_bet(matches):
     bank = load_bank()
     best_bet = None
@@ -1087,10 +1044,7 @@ def find_best_bet(matches):
         return best_bet
     return None
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ОБУЧЕНИЕ
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ОБУЧЕНИЕ =====
 def train_model():
     history = load_history()
     if len(history) < 20:
@@ -1120,14 +1074,10 @@ def train_model():
         prior = {"home": sum(all_xg) / len(all_xg), "away": sum(all_xg) / len(all_xg), "count": len(all_xg)}
         save_prior(prior)
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ (С РЕЖИМАМИ)
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ОТПРАВКА УВЕДОМЛЕНИЯ О НОВОЙ СТАВКЕ =====
 last_notified_bets = {}
 
 def send_bet_notification(bet):
-    """Отправляет уведомление о новой валуйной ставке (краткий/полный режим)"""
     global last_notified_bets
     
     if not bet:
@@ -1145,7 +1095,6 @@ def send_bet_notification(bet):
     factors = bet.get("factors", {})
     ik_reasons = "\n".join([f"• {r}" for r in bet.get("ik_reasons", [])]) if bet.get("ik_reasons") else "Нет"
     
-    # ===== КРАТКИЙ РЕЖИМ (ПО УМОЛЧАНИЮ) =====
     if not SETTINGS.get("full_mode", False):
         msg = f"""🔥 <b>РЕКОМЕНДАЦИЯ</b>
 
@@ -1168,7 +1117,6 @@ def send_bet_notification(bet):
         send_telegram_with_buttons(msg, bet_id)
         return
     
-    # ===== ПОЛНЫЙ РЕЖИМ =====
     injuries_info = ""
     if factors.get("home_injuries_list"):
         injuries_info += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
@@ -1181,7 +1129,6 @@ def send_bet_notification(bet):
     if factors.get("away_scorers"):
         scorers_info += f"\n⚽ Бомбардир гостей: {factors['away_scorers'][0]['name']} ({factors['away_scorers'][0]['goals']} голов)"
     
-    # Анализ кэфов
     odds_analysis = analyze_odds_with_inversion(
         bet['fixture_id'], 
         SETTINGS.get("inversion_mode", False)
@@ -1195,7 +1142,6 @@ def send_bet_notification(bet):
 💡 {odds_analysis['recommendation']}
 """
     
-    # Букмекер vs Бот
     bookmaker_comparison = compare_bot_vs_bookmaker(
         bet['fixture_id'], 
         bet['prob'], 
@@ -1210,7 +1156,6 @@ def send_bet_notification(bet):
 💡 {bookmaker_comparison['recommendation']}
 """
     
-    # Прогноз счёта
     score_prediction = predict_score(bet['home_xg'], bet['away_xg'])
     score_block = f"""
 🔮 ПРОГНОЗ СЧЁТА:
@@ -1252,14 +1197,8 @@ def send_bet_notification(bet):
 # ================================================================
 # !!! АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПОЛНОСТЬЮ ОТКЛЮЧЕНО !!!
 # ================================================================
-# Бот НЕ делает запросы к API автоматически.
-# Только по командам: /update, /today
-# ================================================================
 
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-# ВЕБХУК
-# ===== ===== ===== ===== ===== ===== ===== ===== ===== =====
-
+# ===== ВЕБХУК =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -1272,7 +1211,7 @@ def webhook():
             
             history = load_history()
             for bet in history:
-                if str(bet['id']) == bet_id:
+                if str(bet.get('id')) == bet_id:
                     bet['result'] = result
                     bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                     
@@ -1311,35 +1250,55 @@ def webhook():
                 return "ok"
             
             if text == '/start':
-                send_telegram("""🚀 Quantum Betting Bot v10
+                send_telegram("""🚀 QUANTUM BETTING BOT v10
 
-/today - ЛУЧШАЯ ставка
-/bank - Банк + риск
+⚠️ АВТООБНОВЛЕНИЕ ОТКЛЮЧЕНО!
+Бот НЕ делает запросы к API автоматически.
+
+📋 КОМАНДЫ:
+/today - Лучшая ставка из кеша
+/update - РУЧНОЙ поиск ставок
+/bank - Банк
 /stats - Статистика
-/export - Экспорт CSV
-/update - Обновить
-/risk - Риск-менеджер
-/setbank 1500 - Банк
-/settings - Настройки
-/inversion - Вкл/Выкл инверсию
+/leagues - Активные лиги
 /mode - Краткий/Полный режим
+/inversion - Вкл/Выкл инверсию
+/settings - Настройки
+/export - Экспорт CSV
+/divergence - Расхождения с букмекером
 /help - Помощь""")
             
             elif text == '/today':
                 cache = load_cache()
                 if cache and cache.get("best_bet"):
-                    bet = cache["best_bet"]
+                    send_bet_notification(cache["best_bet"])
                 else:
                     send_telegram("🔄 Обновляю...")
                     matches = get_matches_with_factors()
                     bet = find_best_bet(matches)
                     save_cache({"best_bet": bet})
                     train_model()
-                
-                if bet:
-                    send_bet_notification(bet)
+                    if bet:
+                        send_bet_notification(bet)
+                    else:
+                        send_telegram("❌ Ставок с EV > 5% не найдено")
+            
+            elif text == '/update':
+                send_telegram("🔄 РУЧНОЙ поиск матчей во всех лигах...")
+                matches = get_matches_with_factors()
+                if not matches:
+                    send_telegram("⚠️ API не отвечает, использую тестовые данные")
+                    matches = get_test_matches()
+                if matches:
+                    bet = find_best_bet(matches)
+                    save_cache({"best_bet": bet})
+                    if bet:
+                        send_bet_notification(bet)
+                        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
+                    else:
+                        send_telegram(f"❌ Ставок с EV > 5% нет")
                 else:
-                    send_telegram("❌ Ставок с EV > 5% не найдено")
+                    send_telegram("❌ Матчей не найдено")
             
             elif text == '/mode':
                 SETTINGS['full_mode'] = not SETTINGS['full_mode']
@@ -1370,86 +1329,89 @@ ${bank:.2f}
             elif text == '/risk':
                 send_telegram(risk_manager.get_status())
             
-            elif text == '/update':
-                send_telegram("🔄 Обновляю...")
-                matches = get_matches_with_factors()
-                bet = find_best_bet(matches)
-                save_cache({"best_bet": bet})
-                train_model()
-                send_telegram("✅ Обновлено!" if bet else "❌ Ставок с EV > 5% нет")
-            
-            elif text.startswith('/setbank'):
-                try:
-                    new_bank = float(text.split()[1])
-                    if new_bank < 10:
-                        send_telegram("❌ Минимум $10")
-                    else:
-                        save_bank(new_bank)
-                        send_telegram(f"✅ Банк: ${new_bank:.2f}")
-                except:
-                    send_telegram("❌ Используйте: /setbank 1500")
-            
             elif text == '/settings':
                 status = f"""⚙️ НАСТРОЙКИ
+Порог EV: 5%
 Форма: {'✅' if SETTINGS['improved_form'] else '❌'}
 Судья: {'✅' if SETTINGS['referee'] else '❌'}
 Кэфы: {'✅' if SETTINGS['odds_movement'] else '❌'}
 PSY: {'✅' if SETTINGS['psy_factor'] else '❌'}
 Нейросеть: {'✅' if SETTINGS['neural_learning'] else '❌'}
-ПОРОГ EV: <b>5%</b>
-ПРОВЕРКА: <b>6 часов</b>
 ИНВЕРСИЯ: {'🔀 Вкл' if SETTINGS['inversion_mode'] else '📊 Выкл'}
-РЕЖИМ: {'📋 Полный' if SETTINGS['full_mode'] else '📄 Краткий'}
-
-/toggle [1-5] - слой
-/inversion - инверсия
-/mode - режим"""
+РЕЖИМ: {'📋 Полный' if SETTINGS['full_mode'] else '📄 Краткий'}"""
                 send_telegram(status)
-            
-            elif text.startswith('/toggle'):
-                try:
-                    num = int(text.split()[1])
-                    layers = ["improved_form", "referee", "odds_movement", "psy_factor", "neural_learning"]
-                    if 1 <= num <= 5:
-                        key = layers[num-1]
-                        SETTINGS[key] = not SETTINGS[key]
-                        send_telegram(f"✅ {key}: {'Вкл' if SETTINGS[key] else 'Выкл'}")
-                except:
-                    send_telegram("❌ /toggle 1-5")
             
             elif text == '/divergence':
                 stats = get_divergence_stats()
                 send_telegram(stats)
             
+            elif text == '/leagues':
+                msg = "📊 <b>АКТИВНЫЕ ЛИГИ</b>\n\n"
+                count = 0
+                for league_id, name in LEAGUE_NAMES.items():
+                    msg += f"• {name} (ID: {league_id})\n"
+                    count += 1
+                    if count >= 30:
+                        break
+                msg += f"\n...и ещё {len(LEAGUE_NAMES) - 30} лиг"
+                send_telegram(msg)
+            
             elif text == '/help':
                 send_telegram("""📖 КОМАНДЫ:
 
-/today - Лучшая ставка
-/bank - Банк
+/today - Лучшая ставка из кеша
+/update - РУЧНОЙ поиск (все лиги)
+/bank - Банк + риск
 /stats - Статистика
 /export - Экспорт CSV
-/update - Обновить
 /risk - Риск-менеджер
-/setbank 1500 - Банк
 /settings - Настройки
-/toggle 1 - Слой
-/inversion - Вкл/Выкл инверсию
 /mode - Краткий/Полный режим
-/divergence - Статистика расхождений
-/help - Помощь""")
+/inversion - Вкл/Выкл инверсию
+/divergence - Расхождения с букмекером
+/leagues - Список лиг
+/help - Помощь
+
+⚠️ АВТООБНОВЛЕНИЕ ОТКЛЮЧЕНО!""")
             
             else:
                 send_telegram("❌ /help")
         
         return "ok"
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}")
         return "error", 500
+
+# ===== ТЕСТОВЫЕ ДАННЫЕ =====
+def get_test_matches():
+    return [
+        {"fixture": {"id": 1, "status": {"short": "NS"}}, "teams": {"home": {"name": "Arsenal"}, "away": {"name": "Chelsea"}}, "league": {"name": "АПЛ"}},
+        {"fixture": {"id": 2, "status": {"short": "NS"}}, "teams": {"home": {"name": "Barcelona"}, "away": {"name": "Real Madrid"}}, "league": {"name": "Ла Лига"}},
+        {"fixture": {"id": 3, "status": {"short": "NS"}}, "teams": {"home": {"name": "Bayern Munich"}, "away": {"name": "Dortmund"}}, "league": {"name": "Бундеслига"}},
+        {"fixture": {"id": 4, "status": {"short": "NS"}}, "teams": {"home": {"name": "AC Milan"}, "away": {"name": "Inter"}}, "league": {"name": "Серия А"}},
+        {"fixture": {"id": 5, "status": {"short": "NS"}}, "teams": {"home": {"name": "PSG"}, "away": {"name": "Marseille"}}, "league": {"name": "Лига 1"}},
+        {"fixture": {"id": 6, "status": {"short": "NS"}}, "teams": {"home": {"name": "Flamengo"}, "away": {"name": "Palmeiras"}}, "league": {"name": "Бразилейрао"}},
+        {"fixture": {"id": 7, "status": {"short": "NS"}}, "teams": {"home": {"name": "River Plate"}, "away": {"name": "Boca Juniors"}}, "league": {"name": "Аргентина"}},
+    ]
 
 @app.route('/', methods=['GET'])
 def index():
-    mode = "Полный" if SETTINGS.get('full_mode') else "Краткий"
-    return f"🤖 Quantum Bot v10 | Режим: {mode} | Инверсия: {'Вкл' if SETTINGS.get('inversion_mode') else 'Выкл'} | Банк: ${load_bank():.2f} | {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+    cache = load_cache()
+    bet = cache.get("best_bet") if cache else None
+    status = f"Ставка: {bet['bet']} EV:{bet['ev']}%" if bet else "Нет ставки"
+    return f"🤖 Quantum Bot v10 | АВТО-ОБНОВЛЕНИЕ ОТКЛЮЧЕНО | {status} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+
+@app.route('/health', methods=['GET'])
+def health():
+    return {"status": "ok", "time": datetime.now().isoformat()}
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=10000)
+    port = int(os.environ.get("PORT", 10000))
+    logger.info(f"🚀 Запуск на порту {port}")
+    logger.info(f"📊 Загружено лиг: {len(LEAGUES)}")
+    logger.info("=" * 50)
+    logger.info("⚠️ АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ОТКЛЮЧЕНО!")
+    logger.info("📌 Бот НЕ делает запросы к API автоматически")
+    logger.info("📌 Только по команде /update")
+    logger.info("=" * 50)
+    app.run(host='0.0.0.0', port=port)
