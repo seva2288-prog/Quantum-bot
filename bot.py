@@ -18,7 +18,7 @@ app = Flask(__name__)
 
 # ===== КОНФИГ =====
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74")
-FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "b6a8c1fcee6769a0fa3b0efd9be476")
+FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "fa6a81c18feae6769a0fa3baefd9e476")
 WEATHER_API_KEY = os.getenv('WEATHER_API_KEY', "7f0cfaed346b0fe364815ab65d627af2")
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', "228801334")
 
@@ -195,19 +195,20 @@ last_notified_bets = {}
 
 def send_bet_notification(bet):
     global last_notified_bets
-    
+
     if not bet:
         return
-    
-    if bet['ev'] < 0:
-        return
-    
+
+    # ВРЕМЕННО ОТКЛЮЧАЕМ ПОРОГ, ЧТОБЫ УВИДЕТЬ РЕАЛЬНЫЕ СТАВКИ
+    # if bet['ev'] < 5:
+    #     return
+
     key = f"{bet['fixture_id']}_{bet['bet_type']}"
     if key in last_notified_bets and last_notified_bets[key] == bet['ev']:
         return
-    
+
     last_notified_bets[key] = bet['ev']
-    
+
     msg = f"""🔥 <b>ВАЛУЙНАЯ СТАВКА!</b>
 
 🏟️ {bet['home']} vs {bet['away']}
@@ -225,10 +226,10 @@ def send_bet_notification(bet):
     if bet.get('weather'):
         w = bet['weather']
         msg += f"\n🌡️ {w['weather_ru']}, {w['temp']}°C"
-    
+
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
     send_telegram_with_buttons(msg, bet_id)
-    
+
     history = load_history()
     bet['id'] = bet_id
     bet['result'] = 'pending'
@@ -246,18 +247,18 @@ def webhook():
     try:
         data = request.get_json()
         logger.info(f"📨 ВЕБХУК: {data}")
-        
+
         if data and 'callback_query' in data:
             callback = data['callback_query']
             bet_id = callback['data'].split('_')[1]
             result = callback['data'].split('_')[0]
-            
+
             history = load_history()
             for bet in history:
                 if str(bet.get('id')) == bet_id:
                     bet['result'] = result
                     bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                    
+
                     bank = load_bank()
                     if result == 'win':
                         profit = bet.get('stake', 0) * (bet.get('odds', 1) - 1)
@@ -270,23 +271,23 @@ def webhook():
                     elif result == 'push':
                         send_telegram(f"↩️ Возврат")
                     break
-            
+
             save_history(history)
-            
+
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
             requests.post(url, json={"callback_query_id": callback['id'], "text": "✅ OK"})
             return "ok"
-        
+
         if data and 'message' in data:
             text = data['message'].get('text', '')
             chat_id = data['message']['chat']['id']
-            
+
             logger.info(f"💬 СООБЩЕНИЕ: {text} от {chat_id}")
-            
+
             if str(chat_id) != ADMIN_CHAT_ID:
                 send_telegram("⛔ Нет доступа")
                 return "ok"
-            
+
             if text == '/start':
                 send_telegram("""🚀 QUANTUM BETTING BOT v10 PRO
 
@@ -301,32 +302,33 @@ def webhook():
 /mode - Режим
 /inversion - Инверсия
 /help - Помощь""")
-            
+
             elif text == '/update':
                 send_telegram("🔄 Поиск матчей с учётом погоды...")
                 matches = get_matches_with_factors(FOOTBALL_API_KEY)
+
                 if matches:
-    bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
-    save_cache({"best_bet": bet})
-    if bet:
-        send_bet_notification(bet)
-        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
-    else:
-        send_telegram("❌ Ставок с EV > 0% нет")
-else:
-    send_telegram("⚠️ Матчей не найдено сегодня")
-            
+                    bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
+                    save_cache({"best_bet": bet})
+                    if bet:
+                        send_bet_notification(bet)
+                        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
+                    else:
+                        send_telegram("❌ Ставок с EV > 5% нет")
+                else:
+                    send_telegram("⚠️ Матчей не найдено сегодня")
+
             elif text == '/today':
                 cache = load_cache()
                 if cache and cache.get("best_bet"):
                     send_bet_notification(cache["best_bet"])
                 else:
                     send_telegram("❌ Нет ставок. /update")
-            
+
             elif text == '/bank':
                 bank = load_bank()
                 send_telegram(f"💰 БАНК\n${bank:.2f}")
-            
+
             elif text == '/stats':
                 history = load_history()
                 if not history:
@@ -341,7 +343,7 @@ else:
 ✅ Выигрышей: {wins}
 ❌ Проигрышей: {losses}
 🎯 Проходимость: {round(winrate, 1)}%""")
-            
+
             elif text == '/leagues':
                 msg = "📊 ЛИГИ\n\n"
                 count = 0
@@ -352,17 +354,17 @@ else:
                         break
                 msg += f"\n...и ещё {len(LEAGUE_NAMES) - 30} лиг"
                 send_telegram(msg)
-            
+
             elif text == '/mode':
                 SETTINGS['full_mode'] = not SETTINGS['full_mode']
                 mode = "ПОЛНЫЙ" if SETTINGS['full_mode'] else "КРАТКИЙ"
                 send_telegram(f"📋 Режим: {mode}")
-            
+
             elif text == '/inversion':
                 SETTINGS['inversion_mode'] = not SETTINGS['inversion_mode']
                 status = "ВКЛЮЧЕНА" if SETTINGS['inversion_mode'] else "ВЫКЛЮЧЕНА"
                 send_telegram(f"🔄 Инверсия {status}!")
-            
+
             elif text == '/help':
                 send_telegram("""📖 КОМАНДЫ:
 /today - Ставка
@@ -373,10 +375,10 @@ else:
 /mode - Режим
 /inversion - Инверсия
 /help - Помощь""")
-            
+
             else:
                 send_telegram("❌ Неизвестная команда. /help")
-        
+
         return "ok"
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
