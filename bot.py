@@ -199,7 +199,7 @@ def send_bet_notification(bet):
     if not bet:
         return
     
-    if bet['ev'] < 3:
+    if bet['ev'] < 1:
         return
     
     key = f"{bet['fixture_id']}_{bet['bet_type']}"
