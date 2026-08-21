@@ -199,7 +199,6 @@ def send_bet_notification(bet):
     if not bet:
         return
 
-    # ПОРОГ ОТКЛЮЧЕН — БУДЕТ ПОКАЗЫВАТЬ ЛЮБЫЕ СТАВКИ
     # if bet['ev'] < 5:
     #     return
 
@@ -227,6 +226,28 @@ def send_bet_notification(bet):
         w = bet['weather']
         msg += f"\n🌡️ {w['weather_ru']}, {w['temp']}°C"
 
+    # ===== БЛОК СОСТАВОВ (НОВОЕ) =====
+    if bet.get('home_lineup') or bet.get('away_lineup'):
+        msg += "\n\n👥 <b>СОСТАВЫ:</b>"
+        if bet.get('home_lineup'):
+            players = bet['home_lineup'].get('players', [])[:5]
+            if players:
+                msg += f"\n🏠 {bet['home']}: {', '.join(players)}"
+        if bet.get('away_lineup'):
+            players = bet['away_lineup'].get('players', [])[:5]
+            if players:
+                msg += f"\n✈️ {bet['away']}: {', '.join(players)}"
+
+    # ===== ТРАВМЫ =====
+    factors = bet.get('factors', {})
+    injuries = ""
+    if factors.get('home_injuries_list'):
+        injuries += f"\n🏥 Травмы хозяев: {', '.join(factors['home_injuries_list'][:3])}"
+    if factors.get('away_injuries_list'):
+        injuries += f"\n🏥 Травмы гостей: {', '.join(factors['away_injuries_list'][:3])}"
+    if injuries:
+        msg += f"\n{injuries}"
+
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
     send_telegram_with_buttons(msg, bet_id)
 
@@ -235,7 +256,7 @@ def send_bet_notification(bet):
     bet['result'] = 'pending'
     bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     history.append(bet)
-    save_history(history)
+    save_history(bet)
 
 # ================================================================
 # !!! АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПОЛНОСТЬЮ ОТКЛЮЧЕНО !!!
@@ -304,7 +325,7 @@ def webhook():
 /help - Помощь""")
 
             elif text == '/update':
-                send_telegram("🔄 Поиск матчей с учётом погоды...")
+                send_telegram("🔄 Поиск матчей с учётом погоды и составов...")
                 matches = get_matches_with_factors(FOOTBALL_API_KEY)
 
                 if matches:
