@@ -124,177 +124,253 @@ def get_all_leagues():
 
 # ================================================================
 # ================================================================
-# НАША НОВАЯ ФОРМУЛА (7 ФАКТОРОВ)
-# ================================================================
-# xG_итог = xG_база × f1 × f2 × f3 × f4 × f5 × f6 × f7
+# 🧠 ЧУТЬЁ — 5 ДОПОЛНИТЕЛЬНЫХ СЛОЁВ АНАЛИЗА
 # ================================================================
 # ================================================================
 
-def calculate_xg_advanced(home_team, away_team, match_data, football_api_key):
-    """
-    Рассчитывает xG по нашей формуле с 7 факторами
+# ===== 1. ПСИХОЛОГИЧЕСКИЙ ФАКТОР (ЭЙФОРИЯ, КРИЗИС) =====
+def apply_psychology(home_xg, away_xg, home_form, away_form):
+    reasons = []
     
-    xG = xG_база × домашнее_поле × форма × травмы × мотивация × погода × дерби × состав
+    # Если команда выиграла 5 матчей подряд — эйфория
+    if home_form == 5:
+        home_xg *= 1.05
+        reasons.append("🧠 Эйфория хозяев (+5%)")
+    elif home_form == 0:
+        home_xg *= 0.90
+        reasons.append("🧠 Кризис хозяев (-10%)")
+    
+    if away_form == 5:
+        away_xg *= 1.05
+        reasons.append("🧠 Эйфория гостей (+5%)")
+    elif away_form == 0:
+        away_xg *= 0.90
+        reasons.append("🧠 Кризис гостей (-10%)")
+    
+    return home_xg, away_xg, reasons
+
+# ===== 2. ДВИЖЕНИЕ КЭФОВ (БУКМЕКЕРСКИЙ СТРАХ) =====
+def apply_odds_movement(home_xg, away_xg, fixture_id):
+    reasons = []
+    odds_history = load_odds_history()
+    key = str(fixture_id)
+    
+    if key in odds_history and len(odds_history[key]) >= 2:
+        first = odds_history[key][0].get("odds", 1.9)
+        last = odds_history[key][-1].get("odds", 1.9)
+        change = last - first
+        
+        if change < -0.15:  # кэф упал
+            home_xg *= 1.10
+            reasons.append(f"📉 Букмекер боится хозяев (+10%)")
+        elif change > 0.15:  # кэф вырос
+            home_xg *= 0.90
+            reasons.append(f"📈 Букмекер заманивает (-10%)")
+    
+    return home_xg, away_xg, reasons
+
+# ===== 3. КОНТЕКСТНЫЙ АНАЛИЗ (ДЕРБИ, РЕВАНШ) =====
+def apply_context(home_xg, away_xg, match_data):
+    reasons = []
+    fixture_name = match_data.get("fixture", {}).get("name", "").lower()
+    league_name = match_data.get("league", {}).get("name", "").lower()
+    
+    if "derby" in fixture_name or "derby" in league_name:
+        home_xg *= 0.85
+        away_xg *= 0.85
+        reasons.append("⚔️ Дерби (-15%)")
+    
+    # Реванш — если команда проиграла в прошлой встрече
+    h2h = match_data.get("factors", {}).get("h2h", {})
+    if h2h.get("matches", 0) >= 2:
+        home_wins = h2h.get("home_wins", 0)
+        away_wins = h2h.get("away_wins", 0)
+        if home_wins == 0 and away_wins > 0:
+            home_xg *= 1.08
+            reasons.append("🔥 Хозяева жаждут реванша (+8%)")
+        elif away_wins == 0 and home_wins > 0:
+            away_xg *= 1.08
+            reasons.append("🔥 Гости жаждут реванша (+8%)")
+    
+    return home_xg, away_xg, reasons
+
+# ===== 4. ИНДИВИДУАЛЬНЫЙ ПРОФИЛЬ КОМАНДЫ =====
+def get_team_profile(team_name):
+    """Профили команд — сила атаки и защиты"""
+    profiles = {
+        "Real Madrid": {"attack": 1.2, "defense": 1.0},
+        "Barcelona": {"attack": 1.1, "defense": 0.9},
+        "Bayern Munich": {"attack": 1.2, "defense": 1.1},
+        "Manchester City": {"attack": 1.2, "defense": 1.1},
+        "Liverpool": {"attack": 1.1, "defense": 1.0},
+        "Arsenal": {"attack": 1.1, "defense": 0.9},
+        "Chelsea": {"attack": 0.9, "defense": 1.1},
+        "PSG": {"attack": 1.2, "defense": 0.8},
+        "Inter": {"attack": 1.0, "defense": 1.1},
+        "AC Milan": {"attack": 1.0, "defense": 1.0},
+    }
+    return profiles.get(team_name, {"attack": 1.0, "defense": 1.0})
+
+def apply_profiles(home_xg, away_xg, home_team, away_team):
+    reasons = []
+    home_profile = get_team_profile(home_team)
+    away_profile = get_team_profile(away_team)
+    
+    if home_profile["attack"] > 1.0:
+        home_xg *= home_profile["attack"]
+        reasons.append(f"⚡ Сильная атака хозяев (+{round((home_profile['attack']-1)*100)}%)")
+    
+    if away_profile["defense"] < 1.0:
+        home_xg *= (2 - away_profile["defense"])
+        reasons.append(f"🛡️ Слабая защита гостей (+{round((1 - away_profile['defense'])*100)}%)")
+    
+    return home_xg, away_xg, reasons
+
+# ===== 5. ОБУЧЕНИЕ НА ИСТОРИИ (ДИНАМИЧЕСКИЕ ВЕСА) =====
+def load_weights():
+    try:
+        with open("weights.json", "r") as f:
+            return json.load(f)
+    except:
+        return {"home_win": 1.0, "away_win": 1.0, "btts": 1.0, "over_2_5": 1.0}
+
+def save_weights(weights):
+    with open("weights.json", "w") as f:
+        json.dump(weights, f, indent=2)
+
+def apply_learning(home_xg, away_xg, bet_type):
+    weights = load_weights()
+    factor = weights.get(bet_type, 1.0)
+    
+    if factor != 1.0:
+        home_xg *= factor
+        away_xg *= factor
+    
+    return home_xg, away_xg
+
+# ================================================================
+# ================================================================
+# НОВАЯ ФОРМУЛА С ЧУТЬЁМ (7 факторов + 5 слоёв)
+# ================================================================
+# xG = xG_база × 7 факторов × психология × кэфы × контекст × профиль × обучение
+# ================================================================
+# ================================================================
+
+def calculate_xg_with_intuition(home_team, away_team, match_data, fixture_id, football_api_key, bet_type="btts"):
+    """
+    Рассчитывает xG с учётом:
+    1. 7 базовых факторов (дом, форма, травмы, мотивация, погода, дерби, состав)
+    2. Психология (эйфория, кризис)
+    3. Движение кэфов (букмекерский страх)
+    4. Контекст (дерби, реванш)
+    5. Индивидуальный профиль команды
+    6. Обучение на истории
     """
     
-    # 1️⃣ БАЗОВЫЙ xG (из API или средний)
+    reasons = []
+    
+    # 1️⃣ БАЗОВЫЙ xG
     home_xg = 1.5
     away_xg = 1.3
     
-    # 2️⃣ ДОМАШНЕЕ ПОЛЕ (+8% для хозяев)
+    # 2️⃣ ДОМАШНЕЕ ПОЛЕ
     HOME_BONUS = 1.08
+    home_xg *= HOME_BONUS
+    reasons.append("🏠 Домашнее поле (+8%)")
     
-    # 3️⃣ ФОРМА (последние 5 матчей)
-    #    range: 0.85 - 1.15
+    # 3️⃣ ФОРМА
     home_form = match_data.get("home_form", {}).get("ratio", 0.5)
     away_form = match_data.get("away_form", {}).get("ratio", 0.5)
     form_home = (home_form * 0.3) + 0.85
     form_away = (away_form * 0.3) + 0.85
+    home_xg *= form_home
+    away_xg *= form_away
+    reasons.append(f"📈 Форма хозяев: {round((form_home-1)*100)}%")
+    reasons.append(f"📈 Форма гостей: {round((form_away-1)*100)}%")
     
     # 4️⃣ ТРАВМЫ
-    #    каждая травма -4%
     home_injuries = match_data.get("home_injuries_list", [])
     away_injuries = match_data.get("away_injuries_list", [])
     injury_home = 1 - (len(home_injuries) * 0.04)
     injury_away = 1 - (len(away_injuries) * 0.04)
+    home_xg *= injury_home
+    away_xg *= injury_away
+    if len(home_injuries) > 0:
+        reasons.append(f"🏥 Травмы хозяев: {len(home_injuries)} игроков (-{round((1-injury_home)*100)}%)")
+    if len(away_injuries) > 0:
+        reasons.append(f"🏥 Травмы гостей: {len(away_injuries)} игроков (-{round((1-injury_away)*100)}%)")
     
     # 5️⃣ МОТИВАЦИЯ
-    #    еврокубки или выживание → +12%
     home_motivation = match_data.get("home_motivation", 1.0)
     away_motivation = match_data.get("away_motivation", 1.0)
+    home_xg *= home_motivation
+    away_xg *= away_motivation
+    if home_motivation > 1.0:
+        reasons.append(f"🎯 Мотивация хозяев: +{round((home_motivation-1)*100)}%")
+    if away_motivation > 1.0:
+        reasons.append(f"🎯 Мотивация гостей: +{round((away_motivation-1)*100)}%")
     
     # 6️⃣ ПОГОДА
-    #    дождь → -8%, снег → -15%, жара → +5%
-    weather_impact, _ = get_weather_impact(match_data.get("weather", {}))
+    weather_impact, weather_reason = get_weather_impact(match_data.get("weather", {}))
+    home_xg *= weather_impact
+    away_xg *= weather_impact
+    if weather_impact != 1.0:
+        reasons.append(f"🌤️ {weather_reason}")
     
-    # 7️⃣ ДЕРБИ
-    #    дерби → -8%
+    # 7️⃣ ДЕРБИ (базовый фактор)
     derby_factor = 1.0
-    if "derby" in str(match_data).lower():
-        derby_factor = 0.92
+    fixture_name = match_data.get("fixture", {}).get("name", "").lower()
+    league_name = match_data.get("league", {}).get("name", "").lower()
+    if "derby" in fixture_name or "derby" in league_name:
+        derby_factor = 0.85
+        home_xg *= derby_factor
+        away_xg *= derby_factor
+        reasons.append("⚔️ Дерби (-15%)")
     
     # 8️⃣ СОСТАВ
-    #    неполный состав → -10%, слабый состав → -5%
     home_lineup = match_data.get("home_lineup", {})
     away_lineup = match_data.get("away_lineup", {})
     
     if home_lineup.get("count", 11) < 9:
         lineup_home = 0.90
-    elif home_lineup.get("strength", 1.0) < 0.8:
-        lineup_home = 0.95
-    else:
-        lineup_home = 1.0
-    
+        home_xg *= lineup_home
+        reasons.append(f"👥 Неполный состав хозяев (-{round((1-lineup_home)*100)}%)")
     if away_lineup.get("count", 11) < 9:
         lineup_away = 0.90
-    elif away_lineup.get("strength", 1.0) < 0.8:
-        lineup_away = 0.95
-    else:
-        lineup_away = 1.0
+        away_xg *= lineup_away
+        reasons.append(f"👥 Неполный состав гостей (-{round((1-lineup_away)*100)}%)")
     
     # ================================================================
-    # 📊 ИТОГОВЫЙ РАСЧЁТ ПО ФОРМУЛЕ
+    # 🧠 ДОПОЛНИТЕЛЬНЫЕ СЛОИ (ЧУТЬЁ)
     # ================================================================
     
-    home_xg = (
-        home_xg
-        * HOME_BONUS
-        * form_home
-        * injury_home
-        * home_motivation
-        * weather_impact
-        * derby_factor
-        * lineup_home
-    )
+    # 9️⃣ ПСИХОЛОГИЯ
+    home_xg, away_xg, psych_reasons = apply_psychology(home_xg, away_xg, home_form, away_form)
+    reasons.extend(psych_reasons)
     
-    away_xg = (
-        away_xg
-        * form_away
-        * injury_away
-        * away_motivation
-        * weather_impact
-        * derby_factor
-        * lineup_away
-    )
+    # 🔟 ДВИЖЕНИЕ КЭФОВ
+    home_xg, away_xg, odds_reasons = apply_odds_movement(home_xg, away_xg, fixture_id)
+    reasons.extend(odds_reasons)
+    
+    # 1️⃣1️⃣ КОНТЕКСТ
+    home_xg, away_xg, context_reasons = apply_context(home_xg, away_xg, match_data)
+    reasons.extend(context_reasons)
+    
+    # 1️⃣2️⃣ ПРОФИЛЬ КОМАНД
+    home_xg, away_xg, profile_reasons = apply_profiles(home_xg, away_xg, home_team, away_team)
+    reasons.extend(profile_reasons)
+    
+    # 1️⃣3️⃣ ОБУЧЕНИЕ НА ИСТОРИИ
+    home_xg, away_xg = apply_learning(home_xg, away_xg, bet_type)
     
     # Ограничиваем xG
     home_xg = max(0.3, min(home_xg, 4.5))
     away_xg = max(0.3, min(away_xg, 4.5))
     
-    return home_xg, away_xg
-
-def probability_goals_normal(xg):
-    """
-    Рассчитывает вероятности голов через нормальное распределение
-    """
-    import math
-    variance = xg * 0.8
-    if variance < 0.1:
-        variance = 0.1
-    
-    probs = []
-    for g in [0, 1, 2, 3, 4]:
-        prob = (1 / math.sqrt(2 * math.pi * variance)) * math.exp(-((g - xg) ** 2) / (2 * variance))
-        probs.append(prob)
-    
-    # Нормализуем
-    total = sum(probs)
-    if total > 0:
-        probs = [p / total for p in probs]
-    
-    return probs
-
-def calculate_probs_advanced(home_xg, away_xg):
-    """
-    Рассчитывает вероятности исходов по нашей формуле
-    """
-    home_probs = probability_goals_normal(home_xg)
-    away_probs = probability_goals_normal(away_xg)
-    
-    # Вероятность, что команды забьют
-    home_score = 1 - home_probs[0]  # не 0 голов
-    away_score = 1 - away_probs[0]
-    
-    btts = home_score * away_score
-    
-    # Тотал > 2.5
-    over_2_5 = 0
-    for i, hp in enumerate(home_probs):
-        for j, ap in enumerate(away_probs):
-            if i + j > 2.5:
-                over_2_5 += hp * ap
-    
-    # Победа хозяев
-    home_win = 0
-    for i, hp in enumerate(home_probs):
-        for j, ap in enumerate(away_probs):
-            if i > j:
-                home_win += hp * ap
-    
-    # Победа гостей
-    away_win = 0
-    for i, hp in enumerate(home_probs):
-        for j, ap in enumerate(away_probs):
-            if i < j:
-                away_win += hp * ap
-    
-    # 1Х
-    home_or_draw = home_win + sum(home_probs[i] * away_probs[i] for i in range(len(home_probs)))
-    
-    # 2Х
-    away_or_draw = away_win + sum(home_probs[i] * away_probs[i] for i in range(len(home_probs)))
-    
-    return {
-        "btts": btts,
-        "over_2_5": over_2_5,
-        "home_win": home_win,
-        "away_win": away_win,
-        "home_or_draw": home_or_draw,
-        "away_or_draw": away_or_draw,
-    }
+    return home_xg, away_xg, reasons
 
 # ================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ)
+# ОСТАЛЬНЫЕ ФУНКЦИИ
 # ================================================================
 
 def get_form(team_id, football_api_key):
@@ -470,8 +546,19 @@ def get_team_lineup(fixture_id, team_id, football_api_key):
     
     return None
 
+def load_odds_history():
+    try:
+        with open("odds_history.json", "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_odds_history(data):
+    with open("odds_history.json", "w") as f:
+        json.dump(data, f, indent=2)
+
 # ================================================================
-# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ
+# ПОЛУЧЕНИЕ МАТЧЕЙ
 # ================================================================
 
 def get_matches_with_factors(football_api_key):
@@ -525,19 +612,16 @@ def get_matches_with_factors(football_api_key):
                                     "away_scorers": get_top_scorers(away_id, football_api_key),
                                 }
                                 
-                                # ===== СОСТАВЫ =====
+                                # СОСТАВЫ
                                 home_lineup = get_team_lineup(fixture_id, home_id, football_api_key)
                                 away_lineup = get_team_lineup(fixture_id, away_id, football_api_key)
                                 
                                 if home_lineup:
                                     match["factors"]["home_lineup"] = home_lineup
-                                    logger.info(f"👥 Состав хозяев: {home_lineup['count']} игроков")
-                                
                                 if away_lineup:
                                     match["factors"]["away_lineup"] = away_lineup
-                                    logger.info(f"👥 Состав гостей: {away_lineup['count']} игроков")
                                 
-                                # ===== ПОГОДА =====
+                                # ПОГОДА
                                 city = match.get("fixture", {}).get("venue", {}).get("city", "")
                                 if city:
                                     try:
@@ -547,14 +631,7 @@ def get_matches_with_factors(football_api_key):
                                             match["weather"] = weather
                                             match["weather_impact"] = impact
                                             match["weather_reason"] = reason
-                                            logger.info(f"🌤️ Погода в {city}: {weather['weather_ru']} ({weather['temp']:.0f}°C)")
-                                        else:
-                                            match["weather"] = None
-                                            match["weather_impact"] = 1.0
-                                            match["weather_reason"] = "☀️ Погода неизвестна"
-                                            logger.info(f"⚠️ Погода для {city} не получена")
-                                    except Exception as e:
-                                        logger.warning(f"⚠️ Ошибка погоды: {e}")
+                                    except:
                                         match["weather"] = None
                                         match["weather_impact"] = 1.0
                                         match["weather_reason"] = "☀️ Погода неизвестна"
@@ -583,7 +660,7 @@ def get_matches_with_factors(football_api_key):
     return all_matches
 
 # ================================================================
-# ПОИСК ЛУЧШЕЙ СТАВКИ (С НОВОЙ ФОРМУЛОЙ)
+# ПОИСК ЛУЧШЕЙ СТАВКИ
 # ================================================================
 
 def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notification_func):
@@ -599,37 +676,6 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
             
-            # ===== РАССЧИТЫВАЕМ xG ПО НОВОЙ ФОРМУЛЕ (7 факторов) =====
-            home_xg, away_xg = calculate_xg_advanced(home, away, factors, football_api_key)
-            
-            # ===== ПЫТАЕМСЯ ПОЛУЧИТЬ xG ИЗ API =====
-            try:
-                stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
-                headers = {"x-rapidapi-key": football_api_key}
-                resp = requests.get(stats_url, headers=headers, timeout=10)
-                stats = resp.json()
-                if stats.get("response"):
-                    for stat in stats["response"]:
-                        if stat["team"]["name"] == home:
-                            for item in stat.get("statistics", []):
-                                if item["type"] == "expected_goals" and item.get("value"):
-                                    home_xg_api = float(item["value"])
-                                    # Смешиваем с нашей формулой (50/50)
-                                    home_xg = home_xg * 0.5 + home_xg_api * 0.5
-                        elif stat["team"]["name"] == away:
-                            for item in stat.get("statistics", []):
-                                if item["type"] == "expected_goals" and item.get("value"):
-                                    away_xg_api = float(item["value"])
-                                    away_xg = away_xg * 0.5 + away_xg_api * 0.5
-            except:
-                pass
-            
-            home_xg = max(0.3, min(home_xg, 4.5))
-            away_xg = max(0.3, min(away_xg, 4.5))
-            
-            # ===== РАССЧИТЫВАЕМ ВЕРОЯТНОСТИ =====
-            probs = calculate_probs_advanced(home_xg, away_xg)
-            
             bet_types = [
                 ("btts", 1.85, "ОЗ - ДА"),
                 ("over_2_5", 1.80, "Тотал > 2.5"),
@@ -640,9 +686,42 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             ]
             
             for bet_type, odds, label in bet_types:
+                # Рассчитываем xG с учётом чутья
+                home_xg, away_xg, reasons = calculate_xg_with_intuition(
+                    home, away, factors, fixture_id, football_api_key, bet_type
+                )
+                
+                # Пытаемся получить xG из API
+                try:
+                    stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
+                    headers = {"x-rapidapi-key": football_api_key}
+                    resp = requests.get(stats_url, headers=headers, timeout=10)
+                    stats = resp.json()
+                    if stats.get("response"):
+                        for stat in stats["response"]:
+                            if stat["team"]["name"] == home:
+                                for item in stat.get("statistics", []):
+                                    if item["type"] == "expected_goals" and item.get("value"):
+                                        home_xg_api = float(item["value"])
+                                        home_xg = home_xg * 0.5 + home_xg_api * 0.5
+                            elif stat["team"]["name"] == away:
+                                for item in stat.get("statistics", []):
+                                    if item["type"] == "expected_goals" and item.get("value"):
+                                        away_xg_api = float(item["value"])
+                                        away_xg = away_xg * 0.5 + away_xg_api * 0.5
+                except:
+                    pass
+                
+                home_xg = max(0.3, min(home_xg, 4.5))
+                away_xg = max(0.3, min(away_xg, 4.5))
+                
+                # Считаем вероятности
+                probs = calculate_probs_advanced(home_xg, away_xg)
                 prob = probs.get(bet_type, 0)
+                
                 if prob < 0.05 or prob > 0.99:
                     continue
+                
                 ev = (prob * odds) - 1
                 if ev > best_ev and ev > 0.001:
                     stake = round(bank * ev * 0.3, 2)
@@ -667,6 +746,10 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                         "home_lineup": factors.get("home_lineup"),
                         "away_lineup": factors.get("away_lineup"),
                         "factors": factors,
+                        "intuition": {
+                            "reasons": reasons,
+                            "total_factors": len(reasons)
+                        }
                     }
         except Exception as e:
             logger.error(f"Ошибка: {e}")
@@ -676,3 +759,63 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
         send_bet_notification_func(best_bet)
     
     return best_bet
+
+# ================================================================
+# РАСЧЁТ ВЕРОЯТНОСТЕЙ
+# ================================================================
+
+def probability_goals_normal(xg):
+    import math
+    variance = xg * 0.8
+    if variance < 0.1:
+        variance = 0.1
+    
+    probs = []
+    for g in [0, 1, 2, 3, 4]:
+        prob = (1 / math.sqrt(2 * math.pi * variance)) * math.exp(-((g - xg) ** 2) / (2 * variance))
+        probs.append(prob)
+    
+    total = sum(probs)
+    if total > 0:
+        probs = [p / total for p in probs]
+    
+    return probs
+
+def calculate_probs_advanced(home_xg, away_xg):
+    home_probs = probability_goals_normal(home_xg)
+    away_probs = probability_goals_normal(away_xg)
+    
+    home_score = 1 - home_probs[0]
+    away_score = 1 - away_probs[0]
+    
+    btts = home_score * away_score
+    
+    over_2_5 = 0
+    for i, hp in enumerate(home_probs):
+        for j, ap in enumerate(away_probs):
+            if i + j > 2.5:
+                over_2_5 += hp * ap
+    
+    home_win = 0
+    for i, hp in enumerate(home_probs):
+        for j, ap in enumerate(away_probs):
+            if i > j:
+                home_win += hp * ap
+    
+    away_win = 0
+    for i, hp in enumerate(home_probs):
+        for j, ap in enumerate(away_probs):
+            if i < j:
+                away_win += hp * ap
+    
+    home_or_draw = home_win + sum(home_probs[i] * away_probs[i] for i in range(len(home_probs)))
+    away_or_draw = away_win + sum(home_probs[i] * away_probs[i] for i in range(len(home_probs)))
+    
+    return {
+        "btts": btts,
+        "over_2_5": over_2_5,
+        "home_win": home_win,
+        "away_win": away_win,
+        "home_or_draw": home_or_draw,
+        "away_or_draw": away_or_draw,
+    }
