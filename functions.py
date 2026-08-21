@@ -123,46 +123,58 @@ def get_all_leagues():
     return list(get_league_names().keys())
 
 # ================================================================
-# НАША НОВАЯ ФОРМУЛА (ВМЕСТО ПУАССОНА)
+# ================================================================
+# НАША НОВАЯ ФОРМУЛА (7 ФАКТОРОВ)
+# ================================================================
+# xG_итог = xG_база × f1 × f2 × f3 × f4 × f5 × f6 × f7
+# ================================================================
 # ================================================================
 
 def calculate_xg_advanced(home_team, away_team, match_data, football_api_key):
     """
-    Рассчитывает xG по нашей формуле
+    Рассчитывает xG по нашей формуле с 7 факторами
+    
+    xG = xG_база × домашнее_поле × форма × травмы × мотивация × погода × дерби × состав
     """
     
-    # 1. БАЗОВЫЙ xG
+    # 1️⃣ БАЗОВЫЙ xG (из API или средний)
     home_xg = 1.5
     away_xg = 1.3
     
-    # 2. КОРРЕКЦИЯ ДОМАШНЕГО ПОЛЯ
+    # 2️⃣ ДОМАШНЕЕ ПОЛЕ (+8% для хозяев)
     HOME_BONUS = 1.08
     
-    # 3. ФОРМА
+    # 3️⃣ ФОРМА (последние 5 матчей)
+    #    range: 0.85 - 1.15
     home_form = match_data.get("home_form", {}).get("ratio", 0.5)
     away_form = match_data.get("away_form", {}).get("ratio", 0.5)
     form_home = (home_form * 0.3) + 0.85
     form_away = (away_form * 0.3) + 0.85
     
-    # 4. ТРАВМЫ
+    # 4️⃣ ТРАВМЫ
+    #    каждая травма -4%
     home_injuries = match_data.get("home_injuries_list", [])
     away_injuries = match_data.get("away_injuries_list", [])
     injury_home = 1 - (len(home_injuries) * 0.04)
     injury_away = 1 - (len(away_injuries) * 0.04)
     
-    # 5. МОТИВАЦИЯ
+    # 5️⃣ МОТИВАЦИЯ
+    #    еврокубки или выживание → +12%
     home_motivation = match_data.get("home_motivation", 1.0)
     away_motivation = match_data.get("away_motivation", 1.0)
     
-    # 6. ПОГОДА
+    # 6️⃣ ПОГОДА
+    #    дождь → -8%, снег → -15%, жара → +5%
     weather_impact, _ = get_weather_impact(match_data.get("weather", {}))
     
-    # 7. ДЕРБИ
+    # 7️⃣ ДЕРБИ
+    #    дерби → -8%
     derby_factor = 1.0
     if "derby" in str(match_data).lower():
         derby_factor = 0.92
     
-    # 8. СОСТАВ
+    # 8️⃣ СОСТАВ
+    #    неполный состав → -10%, слабый состав → -5%
     home_lineup = match_data.get("home_lineup", {})
     away_lineup = match_data.get("away_lineup", {})
     
@@ -180,9 +192,30 @@ def calculate_xg_advanced(home_team, away_team, match_data, football_api_key):
     else:
         lineup_away = 1.0
     
-    # 9. ИТОГОВЫЙ xG
-    home_xg = home_xg * HOME_BONUS * form_home * injury_home * home_motivation * weather_impact * derby_factor * lineup_home
-    away_xg = away_xg * form_away * injury_away * away_motivation * weather_impact * derby_factor * lineup_away
+    # ================================================================
+    # 📊 ИТОГОВЫЙ РАСЧЁТ ПО ФОРМУЛЕ
+    # ================================================================
+    
+    home_xg = (
+        home_xg
+        * HOME_BONUS
+        * form_home
+        * injury_home
+        * home_motivation
+        * weather_impact
+        * derby_factor
+        * lineup_home
+    )
+    
+    away_xg = (
+        away_xg
+        * form_away
+        * injury_away
+        * away_motivation
+        * weather_impact
+        * derby_factor
+        * lineup_away
+    )
     
     # Ограничиваем xG
     home_xg = max(0.3, min(home_xg, 4.5))
@@ -261,7 +294,7 @@ def calculate_probs_advanced(home_xg, away_xg):
     }
 
 # ================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ
+# ОСТАЛЬНЫЕ ФУНКЦИИ (БЕЗ ИЗМЕНЕНИЙ)
 # ================================================================
 
 def get_form(team_id, football_api_key):
@@ -566,11 +599,8 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
             
-            # ===== РАССЧИТЫВАЕМ xG ПО НОВОЙ ФОРМУЛЕ =====
+            # ===== РАССЧИТЫВАЕМ xG ПО НОВОЙ ФОРМУЛЕ (7 факторов) =====
             home_xg, away_xg = calculate_xg_advanced(home, away, factors, football_api_key)
-            
-            # ===== РАССЧИТЫВАЕМ ВЕРОЯТНОСТИ =====
-            probs = calculate_probs_advanced(home_xg, away_xg)
             
             # ===== ПЫТАЕМСЯ ПОЛУЧИТЬ xG ИЗ API =====
             try:
@@ -597,7 +627,7 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             home_xg = max(0.3, min(home_xg, 4.5))
             away_xg = max(0.3, min(away_xg, 4.5))
             
-            # Пересчитываем вероятности с обновлённым xG
+            # ===== РАССЧИТЫВАЕМ ВЕРОЯТНОСТИ =====
             probs = calculate_probs_advanced(home_xg, away_xg)
             
             bet_types = [
