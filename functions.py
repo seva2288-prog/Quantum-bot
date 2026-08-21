@@ -23,7 +23,6 @@ def get_city_coords(city_name):
     return None, None
 
 def get_weather_by_city(city_name):
-    """Получает погоду, если не получается — возвращает None (без ошибки)"""
     try:
         lat, lon = get_city_coords(city_name)
         if lat and lon:
@@ -62,7 +61,7 @@ def get_weather_by_city(city_name):
                 }
     except Exception as e:
         logger.warning(f"⚠️ Погода не получена: {e}")
-    return None  # ← ВСЕГДА ВОЗВРАЩАЕМ None, А НЕ ОШИБКУ
+    return None
 
 def get_weather_impact(weather_data):
     if not weather_data:
@@ -292,7 +291,43 @@ def get_top_scorers(team_id, football_api_key):
     return []
 
 # ================================================================
-# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ (ПОГОДА НЕОБЯЗАТЕЛЬНА)
+# НОВАЯ ФУНКЦИЯ: ПОЛУЧЕНИЕ СОСТАВОВ
+# ================================================================
+
+def get_team_lineup(fixture_id, team_id, football_api_key):
+    """
+    Получает стартовый состав команды на матч
+    Возвращает список игроков и оценку силы состава
+    """
+    try:
+        url = f"https://v3.football.api-sports.io/fixtures/lineups?fixture={fixture_id}"
+        headers = {"x-rapidapi-key": football_api_key}
+        resp = requests.get(url, headers=headers, timeout=10)
+        data = resp.json()
+        
+        if data.get("response"):
+            for lineup in data["response"]:
+                if lineup["team"]["id"] == team_id:
+                    players = []
+                    for player in lineup.get("startXI", []):
+                        players.append(player["player"]["name"])
+                    
+                    # Оценка силы состава (по количеству игроков и их позициям)
+                    strength = len(players) / 11
+                    
+                    return {
+                        "players": players,
+                        "count": len(players),
+                        "strength": round(strength, 2),
+                        "has_starters": len(players) >= 9
+                    }
+    except Exception as e:
+        logger.warning(f"⚠️ Не удалось получить состав для команды {team_id}: {e}")
+    
+    return None
+
+# ================================================================
+# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ (ВКЛЮЧАЯ СОСТАВЫ)
 # ================================================================
 
 def get_matches_with_factors(football_api_key):
@@ -343,7 +378,19 @@ def get_matches_with_factors(football_api_key):
                                     "away_scorers": get_top_scorers(away_id, football_api_key),
                                 }
                                 
-                                # ===== ПОГОДА (НЕОБЯЗАТЕЛЬНО) =====
+                                # ===== ПОЛУЧАЕМ СОСТАВЫ =====
+                                home_lineup = get_team_lineup(fixture_id, home_id, football_api_key)
+                                away_lineup = get_team_lineup(fixture_id, away_id, football_api_key)
+                                
+                                if home_lineup:
+                                    match["factors"]["home_lineup"] = home_lineup
+                                    logger.info(f"👥 Состав хозяев: {home_lineup['count']} игроков")
+                                
+                                if away_lineup:
+                                    match["factors"]["away_lineup"] = away_lineup
+                                    logger.info(f"👥 Состав гостей: {away_lineup['count']} игроков")
+                                
+                                # ===== ПОГОДА =====
                                 city = match.get("fixture", {}).get("venue", {}).get("city", "")
                                 if city:
                                     try:
@@ -355,7 +402,6 @@ def get_matches_with_factors(football_api_key):
                                             match["weather_reason"] = reason
                                             logger.info(f"🌤️ Погода в {city}: {weather['weather_ru']} ({weather['temp']:.0f}°C)")
                                         else:
-                                            # Погода не получена — используем нейтральное значение
                                             match["weather"] = None
                                             match["weather_impact"] = 1.0
                                             match["weather_reason"] = "☀️ Погода неизвестна"
@@ -366,7 +412,6 @@ def get_matches_with_factors(football_api_key):
                                         match["weather_impact"] = 1.0
                                         match["weather_reason"] = "☀️ Погода неизвестна"
                                 else:
-                                    # Город не указан
                                     match["weather"] = None
                                     match["weather_impact"] = 1.0
                                     match["weather_reason"] = "☀️ Город неизвестен"
@@ -391,7 +436,7 @@ def get_matches_with_factors(football_api_key):
     return all_matches
 
 # ================================================================
-# ТЕСТОВЫЕ ДАННЫЕ
+# ТЕСТОВЫЕ ДАННЫЕ (НЕ ИСПОЛЬЗУЮТСЯ)
 # ================================================================
 
 def get_test_matches():
@@ -406,7 +451,7 @@ def get_test_matches():
     ]
 
 # ================================================================
-# ПОИСК ЛУЧШЕЙ СТАВКИ
+# ПОИСК ЛУЧШЕЙ СТАВКИ (С УЧЁТОМ СОСТАВОВ)
 # ================================================================
 
 def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notification_func):
@@ -420,16 +465,38 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             away = match["teams"]["away"]["name"]
             league = match["league"]["name"]
             fixture_id = match["fixture"]["id"]
+            factors = match.get("factors", {})
             
             home_xg = 1.5
             away_xg = 1.3
             
-            # Учёт погоды (если есть)
+            # ===== УЧЁТ СОСТАВОВ =====
+            home_lineup = factors.get("home_lineup")
+            away_lineup = factors.get("away_lineup")
+            
+            if home_lineup:
+                # Если в составе меньше 9 игроков — штраф
+                if home_lineup["count"] < 9:
+                    home_xg *= 0.90
+                    logger.info(f"⚠️ У хозяев неполный состав ({home_lineup['count']} игроков) -10%")
+                elif home_lineup["strength"] < 0.8:
+                    home_xg *= 0.95
+                    logger.info(f"⚠️ Слабый состав хозяев ({home_lineup['strength']*100:.0f}%) -5%")
+            
+            if away_lineup:
+                if away_lineup["count"] < 9:
+                    away_xg *= 0.90
+                    logger.info(f"⚠️ У гостей неполный состав ({away_lineup['count']} игроков) -10%")
+                elif away_lineup["strength"] < 0.8:
+                    away_xg *= 0.95
+                    logger.info(f"⚠️ Слабый состав гостей ({away_lineup['strength']*100:.0f}%) -5%")
+            
+            # ===== УЧЁТ ПОГОДЫ =====
             if match.get("weather_impact"):
                 home_xg *= match["weather_impact"]
                 away_xg *= match["weather_impact"]
             
-            # Пробуем получить xG из API
+            # ===== ПОЛУЧАЕМ xG ИЗ API =====
             try:
                 stats_url = f"https://v3.football.api-sports.io/fixtures/statistics?fixture={fixture_id}"
                 headers = {"x-rapidapi-key": football_api_key}
@@ -457,6 +524,8 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                 ("over_2_5", 1.80, "Тотал > 2.5"),
                 ("home_win", 2.0, "Победа хозяев"),
                 ("away_win", 2.0, "Победа гостей"),
+                ("home_or_draw", 1.5, "1Х"),
+                ("away_or_draw", 1.5, "2Х"),
             ]
             
             for bet_type, odds, label in bet_types:
@@ -464,7 +533,7 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                 if prob < 0.05 or prob > 0.99:
                     continue
                 ev = (prob * odds) - 1
-                if ev > best_ev and ev > 0.02:
+                if ev > best_ev and ev > 0.001:
                     stake = round(bank * ev * 0.3, 2)
                     stake = max(0.5, min(stake, bank * 0.05))
                     best_ev = ev
@@ -484,6 +553,9 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                         "weather": match.get("weather"),
                         "weather_impact": match.get("weather_impact", 1.0),
                         "weather_reason": match.get("weather_reason", "☀️ Без погоды"),
+                        "home_lineup": home_lineup,
+                        "away_lineup": away_lineup,
+                        "factors": factors,
                     }
         except Exception as e:
             logger.error(f"Ошибка: {e}")
