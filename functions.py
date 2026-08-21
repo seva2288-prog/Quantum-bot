@@ -14,7 +14,7 @@ WEATHER_API_KEY = "7f0cfaed346b0fe364815ab65d627af2"
 def get_city_coords(city_name):
     try:
         url = f"http://api.openweathermap.org/geo/1.0/direct?q={city_name}&limit=1&appid={WEATHER_API_KEY}"
-        resp = requests.get(url, timeout=10)
+        resp = requests.get(url, timeout=5)
         data = resp.json()
         if data:
             return data[0]['lat'], data[0]['lon']
@@ -23,11 +23,12 @@ def get_city_coords(city_name):
     return None, None
 
 def get_weather_by_city(city_name):
+    """Получает погоду, если не получается — возвращает None (без ошибки)"""
     try:
         lat, lon = get_city_coords(city_name)
         if lat and lon:
             url = f"https://api.openweathermap.org/data/4.0/onecall?lat={lat}&lon={lon}&units=metric&appid={WEATHER_API_KEY}"
-            resp = requests.get(url, timeout=10)
+            resp = requests.get(url, timeout=5)
             data = resp.json()
             
             if data.get("data") and len(data["data"]) > 0:
@@ -60,8 +61,8 @@ def get_weather_by_city(city_name):
                     "emoji": weather_ru[:2] if " " in weather_ru else "🌤️"
                 }
     except Exception as e:
-        logger.error(f"Weather error: {e}")
-    return None
+        logger.warning(f"⚠️ Погода не получена: {e}")
+    return None  # ← ВСЕГДА ВОЗВРАЩАЕМ None, А НЕ ОШИБКУ
 
 def get_weather_impact(weather_data):
     if not weather_data:
@@ -141,7 +142,7 @@ def calculate_probs(home_xg, away_xg):
     }
 
 # ================================================================
-# ОСТАЛЬНЫЕ ФУНКЦИИ
+# ФУНКЦИИ ДЛЯ ФУТБОЛА
 # ================================================================
 
 def get_form(team_id, football_api_key):
@@ -291,7 +292,7 @@ def get_top_scorers(team_id, football_api_key):
     return []
 
 # ================================================================
-# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ
+# ПОЛУЧЕНИЕ МАТЧЕЙ С ФАКТОРАМИ (ПОГОДА НЕОБЯЗАТЕЛЬНА)
 # ================================================================
 
 def get_matches_with_factors(football_api_key):
@@ -342,16 +343,33 @@ def get_matches_with_factors(football_api_key):
                                     "away_scorers": get_top_scorers(away_id, football_api_key),
                                 }
                                 
-                                # ===== ПОГОДА =====
+                                # ===== ПОГОДА (НЕОБЯЗАТЕЛЬНО) =====
                                 city = match.get("fixture", {}).get("venue", {}).get("city", "")
                                 if city:
-                                    weather = get_weather_by_city(city)
-                                    if weather:
-                                        impact, reason = get_weather_impact(weather)
-                                        match["weather"] = weather
-                                        match["weather_impact"] = impact
-                                        match["weather_reason"] = reason
-                                        logger.info(f"🌤️ Погода в {city}: {weather['weather_ru']} ({weather['temp']:.0f}°C)")
+                                    try:
+                                        weather = get_weather_by_city(city)
+                                        if weather:
+                                            impact, reason = get_weather_impact(weather)
+                                            match["weather"] = weather
+                                            match["weather_impact"] = impact
+                                            match["weather_reason"] = reason
+                                            logger.info(f"🌤️ Погода в {city}: {weather['weather_ru']} ({weather['temp']:.0f}°C)")
+                                        else:
+                                            # Погода не получена — используем нейтральное значение
+                                            match["weather"] = None
+                                            match["weather_impact"] = 1.0
+                                            match["weather_reason"] = "☀️ Погода неизвестна"
+                                            logger.info(f"⚠️ Погода для {city} не получена, использую нейтральное значение")
+                                    except Exception as e:
+                                        logger.warning(f"⚠️ Ошибка погоды для {city}: {e}")
+                                        match["weather"] = None
+                                        match["weather_impact"] = 1.0
+                                        match["weather_reason"] = "☀️ Погода неизвестна"
+                                else:
+                                    # Город не указан
+                                    match["weather"] = None
+                                    match["weather_impact"] = 1.0
+                                    match["weather_reason"] = "☀️ Город неизвестен"
                                 
                                 match["league"]["name"] = league_name
                                 all_matches.append(match)
@@ -406,7 +424,7 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             home_xg = 1.5
             away_xg = 1.3
             
-            # Учёт погоды
+            # Учёт погоды (если есть)
             if match.get("weather_impact"):
                 home_xg *= match["weather_impact"]
                 away_xg *= match["weather_impact"]
