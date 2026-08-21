@@ -17,7 +17,7 @@ app = Flask(__name__)
 
 # ===== КОНФИГ =====
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74")
-FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "3e0a7f37589d3a560393ad45b4d5ff")
+FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "de3e69cf50436633fe4d327831c71ece")
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', "228801334")
 
 # ===== ЛОГИ =====
