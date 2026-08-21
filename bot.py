@@ -199,7 +199,7 @@ def send_bet_notification(bet):
     if not bet:
         return
     
-    if bet['ev'] < 1:
+    if bet['ev'] < 0:
         return
     
     key = f"{bet['fixture_id']}_{bet['bet_type']}"
@@ -306,20 +306,15 @@ def webhook():
                 send_telegram("🔄 Поиск матчей с учётом погоды...")
                 matches = get_matches_with_factors(FOOTBALL_API_KEY)
                 if matches:
-                    bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
-                    save_cache({"best_bet": bet})
-                    if bet:
-                        send_bet_notification(bet)
-                        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
-                    else:
-                        send_telegram("❌ Ставок с EV > 5% нет")
-                else:
-                    send_telegram("⚠️ Матчей не найдено, использую тестовые")
-                    test_matches = get_test_matches()
-                    bet = find_best_bet(test_matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
-                    save_cache({"best_bet": bet})
-                    if bet:
-                        send_bet_notification(bet)
+    bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
+    save_cache({"best_bet": bet})
+    if bet:
+        send_bet_notification(bet)
+        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
+    else:
+        send_telegram("❌ Ставок с EV > 0% нет")
+else:
+    send_telegram("⚠️ Матчей не найдено сегодня")
             
             elif text == '/today':
                 cache = load_cache()
