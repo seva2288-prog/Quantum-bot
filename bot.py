@@ -168,20 +168,6 @@ def send_telegram_with_buttons(text, bet_id):
     except Exception as e:
         logger.error(f"Send buttons error: {e}")
 
-def edit_message(chat_id, message_id, new_text):
-    """Редактирует сообщение (убирает кнопки)"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
-        data = {
-            "chat_id": chat_id,
-            "message_id": message_id,
-            "text": new_text,
-            "parse_mode": "HTML"
-        }
-        requests.post(url, json=data, timeout=10)
-    except Exception as e:
-        logger.error(f"Edit message error: {e}")
-
 # ===== ВСЕ ЛИГИ =====
 LEAGUES = [
     39, 140, 78, 135, 61, 40, 141, 79, 136, 62,
@@ -222,11 +208,11 @@ def send_bet_notification(bet):
     if not bet:
         return
 
-    key = f"{bet['fixture_id']}_{bet['bet_type']}"
-    if key in last_notified_bets and last_notified_bets[key] == bet['ev']:
-        return
-
-    last_notified_bets[key] = bet['ev']
+    # ===== УБИРАЕМ ПРОВЕРКУ НА ПОВТОРЫ, ЧТОБЫ НЕ МЕШАЛА =====
+    # key = f"{bet['fixture_id']}_{bet['bet_type']}"
+    # if key in last_notified_bets and last_notified_bets[key] == bet['ev']:
+    #     return
+    # last_notified_bets[key] = bet['ev']
 
     match_time = bet.get("match_time", "⏰ Время не указано")
     league = bet.get("league", "Неизвестная лига")
@@ -289,12 +275,14 @@ def send_bet_notification(bet):
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
     send_telegram_with_buttons(msg, bet_id)
 
+    # ===== СОХРАНЯЕМ В ИСТОРИЮ =====
     history = load_history()
     bet['id'] = bet_id
     bet['result'] = 'pending'
     bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     history.append(bet)
     save_history(history)
+    logger.info(f"✅ Ставка сохранена в историю: {bet['home']} vs {bet['away']}")
 
 # ================================================================
 # !!! НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ !!!
@@ -319,11 +307,13 @@ def webhook():
             callback = data['callback_query']
             callback_data = callback.get('data', '')
             
-            # Получаем данные сообщения для редактирования
+            # Получаем данные сообщения
             message = callback.get('message', {})
             chat_id = message.get('chat', {}).get('id')
             message_id = message.get('message_id')
             original_text = message.get('text', '')
+            
+            logger.info(f"📨 НАЖАТА КНОПКА: {callback_data}")
             
             if '_' in callback_data:
                 parts = callback_data.split('_')
@@ -331,48 +321,66 @@ def webhook():
                     bet_id = parts[1]
                     result = parts[0]
                     
-                    history = load_history()
-                    result_text = ""
-                    bet_found = False
+                    logger.info(f"🔍 Ищу ставку с ID: {bet_id}")
                     
+                    # Загружаем историю
+                    history = load_history()
+                    bet_found = False
+                    result_text = ""
+                    
+                    # Ищем ставку по ID
                     for bet in history:
                         if str(bet.get('id')) == bet_id:
                             bet['result'] = result
                             bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
+                            # Обновляем банк
                             bank = load_bank()
                             if result == 'win':
                                 profit = bet.get('stake', 0) * (bet.get('odds', 1) - 1)
                                 save_bank(bank + profit)
                                 result_text = f"✅ ЗАШЛО! +${profit:.2f}"
+                                logger.info(f"✅ Ставка #{bet_id} зашла! +${profit:.2f}")
                             elif result == 'loss':
                                 stake = bet.get('stake', 0)
                                 save_bank(bank - stake)
                                 result_text = f"❌ НЕ ЗАШЛО! -${stake:.2f}"
+                                logger.info(f"❌ Ставка #{bet_id} не зашла! -${stake:.2f}")
                             elif result == 'push':
                                 result_text = f"↩️ ВОЗВРАТ"
+                                logger.info(f"↩️ Ставка #{bet_id} возврат")
+                            
                             bet_found = True
                             break
                     
+                    # Сохраняем историю, если нашли ставку
                     if bet_found:
                         save_history(history)
-                        
-                        # Отвечаем на колбэк (убираем часики)
-                        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
-                        requests.post(url, json={"callback_query_id": callback.get('id', ''), "text": result_text})
-                        
-                        # Редактируем сообщение (убираем кнопки)
-                        if chat_id and message_id:
-                            new_text = f"{original_text}\n\n{result_text}"
-                            edit_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
-                            payload = {
-                                "chat_id": chat_id,
-                                "message_id": message_id,
-                                "text": new_text,
-                                "parse_mode": "HTML"
-                            }
-                            requests.post(edit_url, json=payload)
-                            
+                        logger.info(f"💾 История сохранена")
+                    else:
+                        logger.warning(f"⚠️ Ставка с ID {bet_id} НЕ НАЙДЕНА в истории!")
+                        result_text = "⚠️ Ставка не найдена"
+                    
+                    # ОТВЕЧАЕМ НА КОЛБЭК (убираем часики на кнопке)
+                    answer_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+                    requests.post(answer_url, json={
+                        "callback_query_id": callback.get('id', ''),
+                        "text": result_text
+                    })
+                    
+                    # РЕДАКТИРУЕМ СООБЩЕНИЕ (убираем кнопки)
+                    if chat_id and message_id:
+                        new_text = f"{original_text}\n\n{result_text}"
+                        edit_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
+                        payload = {
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "text": new_text,
+                            "parse_mode": "HTML"
+                        }
+                        requests.post(edit_url, json=payload)
+                        logger.info(f"✏️ Сообщение отредактировано")
+                    
             return "ok", 200
 
         # ===== ОБРАБОТКА СООБЩЕНИЙ =====
@@ -381,6 +389,8 @@ def webhook():
             text = message.get('text', '')
             chat = message.get('chat', {})
             chat_id = chat.get('id', 0)
+
+            logger.info(f"💬 СООБЩЕНИЕ: {text} от {chat_id}")
 
             if str(chat_id) != ADMIN_CHAT_ID:
                 send_telegram("⛔ Нет доступа")
@@ -454,11 +464,13 @@ def webhook():
                     total = len(history)
                     wins = sum(1 for b in history if b.get('result') == 'win')
                     losses = sum(1 for b in history if b.get('result') == 'loss')
+                    pushes = sum(1 for b in history if b.get('result') == 'push')
                     winrate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
                     send_telegram(f"""📊 СТАТИСТИКА
 Всего: {total}
 ✅ Выигрышей: {wins}
 ❌ Проигрышей: {losses}
+↩️ Возвратов: {pushes}
 🎯 Проходимость: {round(winrate, 1)}%""")
 
             elif text == '/leagues':
