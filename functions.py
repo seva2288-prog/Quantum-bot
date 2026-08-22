@@ -575,6 +575,7 @@ def get_matches_with_factors(football_api_key):
     logger.info(f"🔍 ИЩУ МАТЧИ ЗА {today}...")
     logger.info("=" * 60)
     
+    # Проходим по ВСЕМ лигам
     for league_id in LEAGUES:
         season = "2026"
         try:
@@ -659,12 +660,15 @@ def get_matches_with_factors(football_api_key):
         
         time.sleep(0.3)
     
+    # ВСЕ ЛИГИ ПРОВЕРЕНЫ
     logger.info("=" * 60)
     logger.info(f"📊 ВСЕГО НАЙДЕНО МАТЧЕЙ: {len(all_matches)}")
     logger.info("=" * 60)
+    logger.info("🛑 ПРОВЕРКА ВСЕХ ЛИГ ЗАВЕРШЕНА!")
+    
     return all_matches
 
-# ===== ПОИСК ЛУЧШЕЙ СТАВКИ (ПОРОГ 5%) =====
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
 
 def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notification_func):
     bank = load_bank_func()
@@ -734,7 +738,7 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                 
                 ev = (prob * odds) - 1
                 # ПОРОГ 5%
-                if ev > best_ev and ev > 0.5:
+                if ev > best_ev and ev > 0.05:
                     stake = round(bank * ev * 0.3, 2)
                     stake = max(0.5, min(stake, bank * 0.05))
                     best_ev = ev
