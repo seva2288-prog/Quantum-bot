@@ -49,8 +49,6 @@ def setup_logging():
 
 logger = setup_logging()
 logger.info("🚀 БОТ ЗАПУЩЕН!")
-logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
-logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
 
 # ===== НАСТРОЙКИ =====
 SETTINGS = {
@@ -170,6 +168,20 @@ def send_telegram_with_buttons(text, bet_id):
     except Exception as e:
         logger.error(f"Send buttons error: {e}")
 
+def edit_message(chat_id, message_id, new_text):
+    """Редактирует сообщение (убирает кнопки)"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
+        data = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": new_text,
+            "parse_mode": "HTML"
+        }
+        requests.post(url, json=data, timeout=10)
+    except Exception as e:
+        logger.error(f"Edit message error: {e}")
+
 # ===== ВСЕ ЛИГИ =====
 LEAGUES = [
     39, 140, 78, 135, 61, 40, 141, 79, 136, 62,
@@ -282,7 +294,7 @@ def send_bet_notification(bet):
     bet['result'] = 'pending'
     bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
     history.append(bet)
-    save_history(bet)
+    save_history(history)
 
 # ================================================================
 # !!! НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ !!!
@@ -307,10 +319,11 @@ def webhook():
             callback = data['callback_query']
             callback_data = callback.get('data', '')
             
-            # Извлекаем ID сообщения и чата, чтобы потом отредактировать его
+            # Получаем данные сообщения для редактирования
             message = callback.get('message', {})
             chat_id = message.get('chat', {}).get('id')
             message_id = message.get('message_id')
+            original_text = message.get('text', '')
             
             if '_' in callback_data:
                 parts = callback_data.split('_')
@@ -318,49 +331,44 @@ def webhook():
                     bet_id = parts[1]
                     result = parts[0]
                     
-                    # Загружаем историю
                     history = load_history()
+                    result_text = ""
                     bet_found = False
+                    
                     for bet in history:
                         if str(bet.get('id')) == bet_id:
                             bet['result'] = result
                             bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
                             bank = load_bank()
-                            result_text = ""
                             if result == 'win':
                                 profit = bet.get('stake', 0) * (bet.get('odds', 1) - 1)
                                 save_bank(bank + profit)
-                                result_text = f"✅ Зашло! +${profit:.2f}"
+                                result_text = f"✅ ЗАШЛО! +${profit:.2f}"
                             elif result == 'loss':
                                 stake = bet.get('stake', 0)
                                 save_bank(bank - stake)
-                                result_text = f"❌ Не зашло! -${stake:.2f}"
+                                result_text = f"❌ НЕ ЗАШЛО! -${stake:.2f}"
                             elif result == 'push':
-                                result_text = f"↩️ Возврат"
+                                result_text = f"↩️ ВОЗВРАТ"
                             bet_found = True
                             break
                     
                     if bet_found:
-                        # Сохраняем историю
                         save_history(history)
                         
-                        # ОТВЕЧАЕМ НА КОЛБЭК (чтобы убрать "часики" на кнопке)
+                        # Отвечаем на колбэк (убираем часики)
                         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
                         requests.post(url, json={"callback_query_id": callback.get('id', ''), "text": result_text})
                         
-                        # РЕДАКТИРУЕМ СООБЩЕНИЕ (убираем кнопки и показываем результат)
+                        # Редактируем сообщение (убираем кнопки)
                         if chat_id and message_id:
+                            new_text = f"{original_text}\n\n{result_text}"
                             edit_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
-                            # Берем оригинальный текст ставки, но добавляем результат
-                            original_text = message.get('text', 'Ставка обработана.')
-                            # Убираем клавиатуру
-                            reply_markup = {"inline_keyboard": []} # Пустая клавиатура (скрывает кнопки)
                             payload = {
                                 "chat_id": chat_id,
                                 "message_id": message_id,
-                                "text": f"{original_text}\n\n{result_text}",
-                                "reply_markup": reply_markup,
+                                "text": new_text,
                                 "parse_mode": "HTML"
                             }
                             requests.post(edit_url, json=payload)
