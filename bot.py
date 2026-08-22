@@ -307,35 +307,64 @@ def webhook():
             callback = data['callback_query']
             callback_data = callback.get('data', '')
             
+            # Извлекаем ID сообщения и чата, чтобы потом отредактировать его
+            message = callback.get('message', {})
+            chat_id = message.get('chat', {}).get('id')
+            message_id = message.get('message_id')
+            
             if '_' in callback_data:
                 parts = callback_data.split('_')
                 if len(parts) >= 2:
                     bet_id = parts[1]
                     result = parts[0]
                     
+                    # Загружаем историю
                     history = load_history()
+                    bet_found = False
                     for bet in history:
                         if str(bet.get('id')) == bet_id:
                             bet['result'] = result
                             bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
                             
                             bank = load_bank()
+                            result_text = ""
                             if result == 'win':
                                 profit = bet.get('stake', 0) * (bet.get('odds', 1) - 1)
                                 save_bank(bank + profit)
-                                send_telegram(f"✅ Зашло! +${profit:.2f}")
+                                result_text = f"✅ Зашло! +${profit:.2f}"
                             elif result == 'loss':
                                 stake = bet.get('stake', 0)
                                 save_bank(bank - stake)
-                                send_telegram(f"❌ Не зашло! -${stake:.2f}")
+                                result_text = f"❌ Не зашло! -${stake:.2f}"
                             elif result == 'push':
-                                send_telegram(f"↩️ Возврат")
+                                result_text = f"↩️ Возврат"
+                            bet_found = True
                             break
                     
-                    save_history(history)
-                    
-                    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
-                    requests.post(url, json={"callback_query_id": callback.get('id', ''), "text": "✅ OK"})
+                    if bet_found:
+                        # Сохраняем историю
+                        save_history(history)
+                        
+                        # ОТВЕЧАЕМ НА КОЛБЭК (чтобы убрать "часики" на кнопке)
+                        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+                        requests.post(url, json={"callback_query_id": callback.get('id', ''), "text": result_text})
+                        
+                        # РЕДАКТИРУЕМ СООБЩЕНИЕ (убираем кнопки и показываем результат)
+                        if chat_id and message_id:
+                            edit_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
+                            # Берем оригинальный текст ставки, но добавляем результат
+                            original_text = message.get('text', 'Ставка обработана.')
+                            # Убираем клавиатуру
+                            reply_markup = {"inline_keyboard": []} # Пустая клавиатура (скрывает кнопки)
+                            payload = {
+                                "chat_id": chat_id,
+                                "message_id": message_id,
+                                "text": f"{original_text}\n\n{result_text}",
+                                "reply_markup": reply_markup,
+                                "parse_mode": "HTML"
+                            }
+                            requests.post(edit_url, json=payload)
+                            
             return "ok", 200
 
         # ===== ОБРАБОТКА СООБЩЕНИЙ =====
