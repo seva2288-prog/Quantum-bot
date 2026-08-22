@@ -738,7 +738,7 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                 
                 ev = (prob * odds) - 1
                 # ПОРОГ 5%
-                if ev > best_ev and ev > 0.05:
+                if ev > best_ev and ev > -1:
                     stake = round(bank * ev * 0.3, 2)
                     stake = max(0.5, min(stake, bank * 0.05))
                     best_ev = ev
