@@ -563,7 +563,7 @@ def calculate_probs_advanced(home_xg, away_xg):
         "away_or_draw": away_or_draw,
     }
 
-# ===== ПОЛУЧЕНИЕ МАТЧЕЙ (ТОЛЬКО ПО ЗАПРОСУ) =====
+# ===== ПОЛУЧЕНИЕ МАТЧЕЙ (ВСЕ ЛИГИ) =====
 
 def get_matches_with_factors(football_api_key):
     from bot import LEAGUES, LEAGUE_NAMES, logger
@@ -649,10 +649,6 @@ def get_matches_with_factors(football_api_key):
                             match["league"]["name"] = league_name
                             all_matches.append(match)
                             logger.info(f"✅ {match['teams']['home']['name']} vs {match['teams']['away']['name']} ({league_name})")
-                    
-                    if all_matches:
-                        logger.info(f"✅ НАЙДЕНО {len(all_matches)} МАТЧЕЙ! ОСТАНАВЛИВАЮ ПОИСК.")
-                        break
                 else:
                     logger.info(f"⚠️ Нет матчей в {league_name}")
             else:
@@ -662,16 +658,13 @@ def get_matches_with_factors(football_api_key):
             logger.error(f"❌ Ошибка {league_name}: {e}")
         
         time.sleep(0.3)
-        
-        if all_matches:
-            break
     
     logger.info("=" * 60)
     logger.info(f"📊 ВСЕГО НАЙДЕНО МАТЧЕЙ: {len(all_matches)}")
     logger.info("=" * 60)
     return all_matches
 
-# ===== ПОИСК ЛУЧШЕЙ СТАВКИ =====
+# ===== ПОИСК ЛУЧШЕЙ СТАВКИ (ПОРОГ 5%) =====
 
 def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notification_func):
     bank = load_bank_func()
@@ -740,7 +733,8 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
                     continue
                 
                 ev = (prob * odds) - 1
-                if ev > best_ev and ev > 0.001:
+                # ПОРОГ 5%
+                if ev > best_ev and ev > 0.05:
                     stake = round(bank * ev * 0.3, 2)
                     stake = max(0.5, min(stake, bank * 0.05))
                     best_ev = ev
