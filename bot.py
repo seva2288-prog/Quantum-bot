@@ -28,6 +28,9 @@ WEAK_LEAGUES = [
     "Казахстан", "Узбекистан", "Беларусь"
 ]
 
+# ===== ФЛАГ ПОИСКА =====
+search_running = False
+
 # ===== ЛОГИ =====
 def setup_logging():
     os.makedirs('logs', exist_ok=True)
@@ -46,7 +49,6 @@ def setup_logging():
 
 logger = setup_logging()
 logger.info("🚀 БОТ ЗАПУЩЕН!")
-logger.info("⚠️ НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ НЕТ!")
 
 # ===== НАСТРОЙКИ =====
 SETTINGS = {
@@ -215,7 +217,6 @@ def send_bet_notification(bet):
     match_time = bet.get("match_time", "⏰ Время не указано")
     league = bet.get("league", "Неизвестная лига")
     
-    # ===== ПРОВЕРКА НА СЛАБУЮ ЛИГУ =====
     is_weak = any(weak in league for weak in WEAK_LEAGUES)
     weak_tag = " ⚠️ СЛАБАЯ ЛИГА!" if is_weak else ""
 
@@ -264,7 +265,6 @@ def send_bet_notification(bet):
         for r in reasons:
             msg += f"\n• {r}"
 
-    # ===== ПОДСКАЗКА ДЛЯ СЛАБЫХ ЛИГ =====
     if is_weak and "ОЗ - ДА" in bet.get('bet', ''):
         msg += """
 
@@ -289,18 +289,16 @@ def send_bet_notification(bet):
 # ===== ВЕБХУК =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
+    global search_running
+    
     try:
         data = request.get_json()
         
         if data is None:
-            logger.warning("⚠️ Пустые данные в webhook")
             return "ok", 200
         
         if not isinstance(data, dict):
-            logger.warning(f"⚠️ Неправильный формат данных: {type(data)}")
             return "ok", 200
-        
-        logger.info(f"📨 ВЕБХУК: {data}")
 
         # ===== ОБРАБОТКА НАЖАТИЯ КНОПКИ =====
         if 'callback_query' in data and data['callback_query']:
@@ -345,8 +343,6 @@ def webhook():
             chat = message.get('chat', {})
             chat_id = chat.get('id', 0)
 
-            logger.info(f"💬 СООБЩЕНИЕ: {text} от {chat_id}")
-
             if str(chat_id) != ADMIN_CHAT_ID:
                 send_telegram("⛔ Нет доступа")
                 return "ok", 200
@@ -355,12 +351,13 @@ def webhook():
             if text == '/start':
                 send_telegram("""🚀 QUANTUM BETTING BOT v10 PRO
 
-⚠️ БОТ НИЧЕГО НЕ ИЩЕТ АВТОМАТИЧЕСКИ!
-⚠️ ТОЛЬКО ПО КОМАНДЕ /update
+⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update
+⚠️ /stop - ОСТАНОВИТЬ ПОИСК
 
 📋 КОМАНДЫ:
 /today - Ставка из кеша
 /update - РУЧНОЙ поиск
+/stop - ОСТАНОВИТЬ поиск
 /bank - Банк
 /stats - Статистика
 /leagues - Лиги
@@ -368,20 +365,36 @@ def webhook():
 /inversion - Инверсия
 /help - Помощь""")
 
-            elif text == '/update':
-                send_telegram("🔄 РУЧНОЙ поиск матчей...")
-                matches = get_matches_with_factors(FOOTBALL_API_KEY)
+            elif text == '/stop':
+                search_running = False
+                send_telegram("🛑 ПОИСК ОСТАНОВЛЕН!")
 
-                if matches:
-                    bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
-                    save_cache({"best_bet": bet})
-                    if bet:
-                        send_bet_notification(bet)
-                        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
-                    else:
-                        send_telegram("❌ Валуйных ставок с EV > 5% не найдено")
+            elif text == '/update':
+                if search_running:
+                    send_telegram("⚠️ Поиск уже запущен! Используйте /stop для остановки.")
                 else:
-                    send_telegram("⚠️ Матчей не найдено сегодня")
+                    search_running = True
+                    send_telegram("🔄 РУЧНОЙ поиск матчей... (для остановки нажмите /stop)")
+                    
+                    try:
+                        matches = get_matches_with_factors(FOOTBALL_API_KEY)
+                        
+                        if matches:
+                            bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
+                            save_cache({"best_bet": bet})
+                            if bet:
+                                send_bet_notification(bet)
+                                send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
+                            else:
+                                send_telegram("❌ Валуйных ставок с EV > 5% не найдено")
+                        else:
+                            send_telegram("⚠️ Матчей не найдено сегодня")
+                    except Exception as e:
+                        logger.error(f"Ошибка при поиске: {e}")
+                        send_telegram("❌ Ошибка при поиске матчей")
+                    finally:
+                        search_running = False
+                        send_telegram("✅ ПОИСК ЗАВЕРШЁН!")
 
             elif text == '/today':
                 cache = load_cache()
@@ -436,6 +449,7 @@ def webhook():
                 send_telegram("""📖 КОМАНДЫ:
 /today - Ставка
 /update - Поиск
+/stop - ОСТАНОВИТЬ поиск
 /bank - Банк
 /stats - Статистика
 /leagues - Лиги
@@ -468,7 +482,7 @@ if __name__ == "__main__":
     logger.info(f"📊 Загружено лиг: {len(LEAGUES)}")
     logger.info("=" * 50)
     logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
+    logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
     logger.info("📌 Порог EV: 5%")
-    logger.info("📌 Слабые лиги: Аргентина, Уругвай, Парагвай...")
     logger.info("=" * 50)
     app.run(host='0.0.0.0', port=port)
