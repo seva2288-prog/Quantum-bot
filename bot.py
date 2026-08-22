@@ -3,8 +3,7 @@ import requests
 import math
 import json
 import os
-from datetime import datetime, timedelta
-import threading
+from datetime import datetime
 import time
 import logging
 from logging.handlers import RotatingFileHandler
@@ -40,6 +39,7 @@ def setup_logging():
 
 logger = setup_logging()
 logger.info("🚀 БОТ ЗАПУЩЕН!")
+logger.info("⚠️ НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ НЕТ!")
 
 # ===== НАСТРОЙКИ =====
 SETTINGS = {
@@ -132,6 +132,7 @@ def save_divergence(data):
     with open(DIVERGENCE_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
+# ===== ОТПРАВКА =====
 def send_telegram(text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -205,7 +206,6 @@ def send_bet_notification(bet):
 
     last_notified_bets[key] = bet['ev']
 
-    # ===== ВРЕМЯ МАТЧА (НОВОЕ) =====
     match_time = bet.get("match_time", "⏰ Время не указано")
 
     msg = f"""🔥 <b>ВАЛУЙНАЯ СТАВКА!</b>
@@ -227,7 +227,6 @@ def send_bet_notification(bet):
         w = bet['weather']
         msg += f"\n🌡️ {w['weather_ru']}, {w['temp']}°C"
 
-    # ===== СОСТАВЫ =====
     if bet.get('home_lineup') or bet.get('away_lineup'):
         msg += "\n\n👥 <b>СОСТАВЫ:</b>"
         if bet.get('home_lineup'):
@@ -239,7 +238,6 @@ def send_bet_notification(bet):
             if players:
                 msg += f"\n✈️ {bet['away']}: {', '.join(players)}"
 
-    # ===== ТРАВМЫ =====
     factors = bet.get('factors', {})
     injuries = ""
     if factors.get('home_injuries_list'):
@@ -249,7 +247,6 @@ def send_bet_notification(bet):
     if injuries:
         msg += f"\n{injuries}"
 
-    # ===== ЧУТЬЁ =====
     if bet.get('intuition') and bet['intuition'].get('reasons'):
         reasons = bet['intuition']['reasons'][:5]
         msg += "\n\n🧠 <b>ЧУТЬЁ:</b>"
@@ -267,7 +264,7 @@ def send_bet_notification(bet):
     save_history(bet)
 
 # ================================================================
-# !!! АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ПОЛНОСТЬЮ ОТКЛЮЧЕНО !!!
+# !!! НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ !!!
 # ================================================================
 
 # ===== ВЕБХУК =====
@@ -320,7 +317,8 @@ def webhook():
             if text == '/start':
                 send_telegram("""🚀 QUANTUM BETTING BOT v10 PRO
 
-⚠️ АВТООБНОВЛЕНИЕ ОТКЛЮЧЕНО!
+⚠️ БОТ НИЧЕГО НЕ ИЩЕТ АВТОМАТИЧЕСКИ!
+⚠️ ТОЛЬКО ПО КОМАНДЕ /update
 
 📋 КОМАНДЫ:
 /today - Ставка из кеша
@@ -333,7 +331,7 @@ def webhook():
 /help - Помощь""")
 
             elif text == '/update':
-                send_telegram("🔄 Поиск матчей с чутьём...")
+                send_telegram("🔄 РУЧНОЙ поиск матчей...")
                 matches = get_matches_with_factors(FOOTBALL_API_KEY)
 
                 if matches:
@@ -430,7 +428,7 @@ if __name__ == "__main__":
     logger.info(f"📊 Загружено лиг: {len(LEAGUES)}")
     logger.info("=" * 50)
     logger.info("⚠️ АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ОТКЛЮЧЕНО!")
-    logger.info("📌 Бот НЕ делает запросы к API автоматически")
+    logger.info("⚠️ НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ НЕТ!")
     logger.info("📌 Только по команде /update")
     logger.info("=" * 50)
     app.run(host='0.0.0.0', port=port)
