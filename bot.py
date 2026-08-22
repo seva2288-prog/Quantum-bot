@@ -49,6 +49,8 @@ def setup_logging():
 
 logger = setup_logging()
 logger.info("🚀 БОТ ЗАПУЩЕН!")
+logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
+logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
 
 # ===== НАСТРОЙКИ =====
 SETTINGS = {
@@ -283,7 +285,7 @@ def send_bet_notification(bet):
     save_history(bet)
 
 # ================================================================
-# !!! НИКАКИХ АВТОМАТИЧЕСКИХ ЗАПУСКОВ !!!
+# !!! НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ !!!
 # ================================================================
 
 # ===== ВЕБХУК =====
@@ -374,7 +376,7 @@ def webhook():
                     send_telegram("⚠️ Поиск уже запущен! Используйте /stop для остановки.")
                 else:
                     search_running = True
-                    send_telegram("🔄 РУЧНОЙ поиск матчей... (для остановки нажмите /stop)")
+                    send_telegram("🔄 Поиск матчей... (для остановки нажмите /stop)")
                     
                     try:
                         matches = get_matches_with_factors(FOOTBALL_API_KEY)
@@ -394,7 +396,7 @@ def webhook():
                         send_telegram("❌ Ошибка при поиске матчей")
                     finally:
                         search_running = False
-                        send_telegram("✅ ПОИСК ЗАВЕРШЁН!")
+                        send_telegram("✅ ПОИСК ЗАВЕРШЁН! Проверено все лиги.")
 
             elif text == '/today':
                 cache = load_cache()
@@ -470,7 +472,7 @@ def index():
     cache = load_cache()
     bet = cache.get("best_bet") if cache else None
     status = f"Ставка: {bet['bet']} EV:{bet['ev']}%" if bet else "Нет ставки"
-    return f"🤖 Quantum Bot v10 PRO | АВТО-ОБНОВЛЕНИЕ ОТКЛЮЧЕНО | {status} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    return f"🤖 Quantum Bot v10 PRO | ПОИСК ТОЛЬКО ПО /update | {status} | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
 
 @app.route('/health', methods=['GET'])
 def health():
