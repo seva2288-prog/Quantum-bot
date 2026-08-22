@@ -563,7 +563,7 @@ def calculate_probs_advanced(home_xg, away_xg):
         "away_or_draw": away_or_draw,
     }
 
-# ===== ПОЛУЧЕНИЕ МАТЧЕЙ =====
+# ===== ПОЛУЧЕНИЕ МАТЧЕЙ (ТОЛЬКО ПО ЗАПРОСУ) =====
 
 def get_matches_with_factors(football_api_key):
     from bot import LEAGUES, LEAGUE_NAMES, logger
@@ -576,85 +576,95 @@ def get_matches_with_factors(football_api_key):
     logger.info("=" * 60)
     
     for league_id in LEAGUES:
-        for season in ["2026", "2025"]:
-            try:
-                url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season={season}&date={today}"
-                headers = {"x-rapidapi-key": football_api_key}
-                
-                league_name = LEAGUE_NAMES.get(league_id, str(league_id))
-                logger.info(f"📡 ЗАПРОС: {league_name} (ID:{league_id}, сезон {season})")
-                
-                resp = requests.get(url, headers=headers, timeout=20)
-                logger.info(f"📡 ОТВЕТ: статус {resp.status_code}")
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get("response"):
-                        for match in data["response"]:
-                            if match["fixture"]["status"]["short"] == "NS":
-                                home_id = match["teams"]["home"]["id"]
-                                away_id = match["teams"]["away"]["id"]
-                                fixture_id = match["fixture"]["id"]
-                                
-                                home_motivation, home_motivation_text = get_motivation(home_id, league_id, football_api_key)
-                                away_motivation, away_motivation_text = get_motivation(away_id, league_id, football_api_key)
-                                
-                                match["factors"] = {
-                                    "home_form": get_form(home_id, football_api_key),
-                                    "away_form": get_form(away_id, football_api_key),
-                                    "home_injuries": get_injuries(home_id, football_api_key)[0],
-                                    "away_injuries": get_injuries(away_id, football_api_key)[0],
-                                    "home_injuries_list": get_injuries(home_id, football_api_key)[1],
-                                    "away_injuries_list": get_injuries(away_id, football_api_key)[1],
-                                    "home_motivation": home_motivation,
-                                    "away_motivation": away_motivation,
-                                    "home_motivation_text": home_motivation_text,
-                                    "away_motivation_text": away_motivation_text,
-                                    "h2h": get_h2h(home_id, away_id, football_api_key),
-                                    "referee": get_referee_style(fixture_id, football_api_key),
-                                    "home_scorers": get_top_scorers(home_id, football_api_key),
-                                    "away_scorers": get_top_scorers(away_id, football_api_key),
-                                }
-                                
-                                home_lineup = get_team_lineup(fixture_id, home_id, football_api_key)
-                                away_lineup = get_team_lineup(fixture_id, away_id, football_api_key)
-                                
-                                if home_lineup:
-                                    match["factors"]["home_lineup"] = home_lineup
-                                if away_lineup:
-                                    match["factors"]["away_lineup"] = away_lineup
-                                
-                                city = match.get("fixture", {}).get("venue", {}).get("city", "")
-                                if city:
-                                    try:
-                                        weather = get_weather_by_city(city)
-                                        if weather:
-                                            impact, reason = get_weather_impact(weather)
-                                            match["weather"] = weather
-                                            match["weather_impact"] = impact
-                                            match["weather_reason"] = reason
-                                    except:
-                                        match["weather"] = None
-                                        match["weather_impact"] = 1.0
-                                        match["weather_reason"] = "☀️ Погода неизвестна"
-                                else:
+        season = "2026"
+        try:
+            url = f"https://v3.football.api-sports.io/fixtures?league={league_id}&season={season}&date={today}"
+            headers = {"x-rapidapi-key": football_api_key}
+            
+            league_name = LEAGUE_NAMES.get(league_id, str(league_id))
+            logger.info(f"📡 ПРОВЕРЯЮ: {league_name} (ID:{league_id})")
+            
+            resp = requests.get(url, headers=headers, timeout=15)
+            
+            if resp.status_code == 429:
+                logger.warning(f"⚠️ ЛИМИТ ЗАПРОСОВ! ЖДУ 5 СЕКУНД...")
+                time.sleep(5)
+                continue
+            
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("response"):
+                    for match in data["response"]:
+                        if match["fixture"]["status"]["short"] == "NS":
+                            home_id = match["teams"]["home"]["id"]
+                            away_id = match["teams"]["away"]["id"]
+                            fixture_id = match["fixture"]["id"]
+                            
+                            home_motivation, home_motivation_text = get_motivation(home_id, league_id, football_api_key)
+                            away_motivation, away_motivation_text = get_motivation(away_id, league_id, football_api_key)
+                            
+                            match["factors"] = {
+                                "home_form": get_form(home_id, football_api_key),
+                                "away_form": get_form(away_id, football_api_key),
+                                "home_injuries": get_injuries(home_id, football_api_key)[0],
+                                "away_injuries": get_injuries(away_id, football_api_key)[0],
+                                "home_injuries_list": get_injuries(home_id, football_api_key)[1],
+                                "away_injuries_list": get_injuries(away_id, football_api_key)[1],
+                                "home_motivation": home_motivation,
+                                "away_motivation": away_motivation,
+                                "home_motivation_text": home_motivation_text,
+                                "away_motivation_text": away_motivation_text,
+                                "h2h": get_h2h(home_id, away_id, football_api_key),
+                                "referee": get_referee_style(fixture_id, football_api_key),
+                                "home_scorers": get_top_scorers(home_id, football_api_key),
+                                "away_scorers": get_top_scorers(away_id, football_api_key),
+                            }
+                            
+                            home_lineup = get_team_lineup(fixture_id, home_id, football_api_key)
+                            away_lineup = get_team_lineup(fixture_id, away_id, football_api_key)
+                            
+                            if home_lineup:
+                                match["factors"]["home_lineup"] = home_lineup
+                            if away_lineup:
+                                match["factors"]["away_lineup"] = away_lineup
+                            
+                            city = match.get("fixture", {}).get("venue", {}).get("city", "")
+                            if city:
+                                try:
+                                    weather = get_weather_by_city(city)
+                                    if weather:
+                                        impact, reason = get_weather_impact(weather)
+                                        match["weather"] = weather
+                                        match["weather_impact"] = impact
+                                        match["weather_reason"] = reason
+                                except:
                                     match["weather"] = None
                                     match["weather_impact"] = 1.0
-                                    match["weather_reason"] = "☀️ Город неизвестен"
-                                
-                                match["league"]["name"] = league_name
-                                all_matches.append(match)
-                                logger.info(f"✅ {match['teams']['home']['name']} vs {match['teams']['away']['name']} ({league_name})")
-                        break
-                    else:
-                        logger.info(f"⚠️ Нет матчей в {league_name} (сезон {season})")
-                else:
-                    logger.error(f"❌ ОШИБКА {resp.status_code}: {resp.text[:200]}")
+                                    match["weather_reason"] = "☀️ Погода неизвестна"
+                            else:
+                                match["weather"] = None
+                                match["weather_impact"] = 1.0
+                                match["weather_reason"] = "☀️ Город неизвестен"
+                            
+                            match["league"]["name"] = league_name
+                            all_matches.append(match)
+                            logger.info(f"✅ {match['teams']['home']['name']} vs {match['teams']['away']['name']} ({league_name})")
                     
-            except Exception as e:
-                logger.error(f"❌ ИСКЛЮЧЕНИЕ: {e}")
-            
-            time.sleep(0.1)
+                    if all_matches:
+                        logger.info(f"✅ НАЙДЕНО {len(all_matches)} МАТЧЕЙ! ОСТАНАВЛИВАЮ ПОИСК.")
+                        break
+                else:
+                    logger.info(f"⚠️ Нет матчей в {league_name}")
+            else:
+                logger.warning(f"❌ Ошибка {league_name}: {resp.status_code}")
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка {league_name}: {e}")
+        
+        time.sleep(0.3)
+        
+        if all_matches:
+            break
     
     logger.info("=" * 60)
     logger.info(f"📊 ВСЕГО НАЙДЕНО МАТЧЕЙ: {len(all_matches)}")
@@ -676,7 +686,6 @@ def find_best_bet(matches, football_api_key, load_bank_func, send_bet_notificati
             fixture_id = match["fixture"]["id"]
             factors = match.get("factors", {})
             
-            # ===== ВРЕМЯ МАТЧА (НОВОЕ) =====
             match_time = match.get("fixture", {}).get("date", "")
             if match_time:
                 try:
