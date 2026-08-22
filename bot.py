@@ -267,55 +267,66 @@ def send_bet_notification(bet):
 # !!! НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ !!!
 # ================================================================
 
-# ===== ВЕБХУК =====
+# ===== ВЕБХУК (УСТОЙЧИВЫЙ) =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Получаем данные
         data = request.get_json()
         
-        # Проверяем, что данные пришли
+        # Защита от пустых данных
         if data is None:
             logger.warning("⚠️ Пустые данные в webhook")
+            return "ok", 200
+        
+        # Защита от неправильного формата
+        if not isinstance(data, dict):
+            logger.warning(f"⚠️ Неправильный формат данных: {type(data)}")
             return "ok", 200
         
         logger.info(f"📨 ВЕБХУК: {data}")
 
         # ===== ОБРАБОТКА НАЖАТИЯ КНОПКИ =====
-        if 'callback_query' in data:
+        if 'callback_query' in data and data['callback_query']:
             callback = data['callback_query']
-            bet_id = callback['data'].split('_')[1]
-            result = callback['data'].split('_')[0]
-
-            history = load_history()
-            for bet in history:
-                if str(bet.get('id')) == bet_id:
-                    bet['result'] = result
-                    bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-                    bank = load_bank()
-                    if result == 'win':
-                        profit = bet.get('stake', 0) * (bet.get('odds', 1) - 1)
-                        save_bank(bank + profit)
-                        send_telegram(f"✅ Зашло! +${profit:.2f}")
-                    elif result == 'loss':
-                        stake = bet.get('stake', 0)
-                        save_bank(bank - stake)
-                        send_telegram(f"❌ Не зашло! -${stake:.2f}")
-                    elif result == 'push':
-                        send_telegram(f"↩️ Возврат")
-                    break
-
-            save_history(history)
-
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
-            requests.post(url, json={"callback_query_id": callback['id'], "text": "✅ OK"})
+            callback_data = callback.get('data', '')
+            
+            if '_' in callback_data:
+                parts = callback_data.split('_')
+                if len(parts) >= 2:
+                    bet_id = parts[1]
+                    result = parts[0]
+                    
+                    history = load_history()
+                    for bet in history:
+                        if str(bet.get('id')) == bet_id:
+                            bet['result'] = result
+                            bet['date'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                            
+                            bank = load_bank()
+                            if result == 'win':
+                                profit = bet.get('stake', 0) * (bet.get('odds', 1) - 1)
+                                save_bank(bank + profit)
+                                send_telegram(f"✅ Зашло! +${profit:.2f}")
+                            elif result == 'loss':
+                                stake = bet.get('stake', 0)
+                                save_bank(bank - stake)
+                                send_telegram(f"❌ Не зашло! -${stake:.2f}")
+                            elif result == 'push':
+                                send_telegram(f"↩️ Возврат")
+                            break
+                    
+                    save_history(history)
+                    
+                    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
+                    requests.post(url, json={"callback_query_id": callback.get('id', ''), "text": "✅ OK"})
             return "ok", 200
 
         # ===== ОБРАБОТКА СООБЩЕНИЙ =====
-        if 'message' in data:
-            text = data['message'].get('text', '')
-            chat_id = data['message']['chat']['id']
+        if 'message' in data and data['message']:
+            message = data['message']
+            text = message.get('text', '')
+            chat = message.get('chat', {})
+            chat_id = chat.get('id', 0)
 
             logger.info(f"💬 СООБЩЕНИЕ: {text} от {chat_id}")
 
@@ -351,7 +362,7 @@ def webhook():
                         send_bet_notification(bet)
                         send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
                     else:
-                        send_telegram("❌ Валуйных ставок не найдено")
+                        send_telegram("❌ Валуйных ставок с EV > 5% не найдено")
                 else:
                     send_telegram("⚠️ Матчей не найдено сегодня")
 
@@ -419,7 +430,7 @@ def webhook():
         return "ok", 200
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
-        return "error", 500
+        return "ok", 200
 
 @app.route('/', methods=['GET'])
 def index():
@@ -440,5 +451,6 @@ if __name__ == "__main__":
     logger.info("⚠️ АВТОМАТИЧЕСКОЕ ОБНОВЛЕНИЕ ОТКЛЮЧЕНО!")
     logger.info("⚠️ НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ НЕТ!")
     logger.info("📌 Только по команде /update")
+    logger.info("📌 Порог EV: 5%")
     logger.info("=" * 50)
     app.run(host='0.0.0.0', port=port)
