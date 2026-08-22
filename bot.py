@@ -271,10 +271,18 @@ def send_bet_notification(bet):
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
+        # Получаем данные
         data = request.get_json()
+        
+        # Проверяем, что данные пришли
+        if data is None:
+            logger.warning("⚠️ Пустые данные в webhook")
+            return "ok", 200
+        
         logger.info(f"📨 ВЕБХУК: {data}")
 
-        if data and 'callback_query' in data:
+        # ===== ОБРАБОТКА НАЖАТИЯ КНОПКИ =====
+        if 'callback_query' in data:
             callback = data['callback_query']
             bet_id = callback['data'].split('_')[1]
             result = callback['data'].split('_')[0]
@@ -302,9 +310,10 @@ def webhook():
 
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
             requests.post(url, json={"callback_query_id": callback['id'], "text": "✅ OK"})
-            return "ok"
+            return "ok", 200
 
-        if data and 'message' in data:
+        # ===== ОБРАБОТКА СООБЩЕНИЙ =====
+        if 'message' in data:
             text = data['message'].get('text', '')
             chat_id = data['message']['chat']['id']
 
@@ -312,8 +321,9 @@ def webhook():
 
             if str(chat_id) != ADMIN_CHAT_ID:
                 send_telegram("⛔ Нет доступа")
-                return "ok"
+                return "ok", 200
 
+            # ===== КОМАНДЫ =====
             if text == '/start':
                 send_telegram("""🚀 QUANTUM BETTING BOT v10 PRO
 
@@ -406,7 +416,7 @@ def webhook():
             else:
                 send_telegram("❌ Неизвестная команда. /help")
 
-        return "ok"
+        return "ok", 200
     except Exception as e:
         logger.error(f"❌ Webhook error: {e}")
         return "error", 500
