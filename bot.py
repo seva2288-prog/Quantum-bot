@@ -50,7 +50,7 @@ def setup_logging():
 logger = setup_logging()
 logger.info("🚀 БОТ ЗАПУЩЕН!")
 logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
-logger.info("⚠️ АВТОМАТИЧЕСКИЙ ЗАПУСК ЗАБЛОКИРОВАН!")
+logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
 
 # ===== НАСТРОЙКИ =====
 SETTINGS = {
@@ -286,7 +286,6 @@ def send_bet_notification(bet):
 
 # ================================================================
 # !!! НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ !!!
-# !!! ВСЕ ЗАПУСКИ ТОЛЬКО ПО КОМАНДЕ !!!
 # ================================================================
 
 # ===== ВЕБХУК =====
@@ -350,21 +349,17 @@ def webhook():
                 send_telegram("⛔ Нет доступа")
                 return "ok", 200
 
-            # ===== БЛОКИРОВКА ЛЮБЫХ ЗАПУСКОВ КРОМЕ /update =====
-            if text != '/update' and text != '/start' and text != '/stop' and text != '/today' and text != '/bank' and text != '/stats' and text != '/leagues' and text != '/mode' and text != '/inversion' and text != '/help':
-                send_telegram("❌ Неизвестная команда. /help")
-                return "ok", 200
-
             # ===== КОМАНДЫ =====
             if text == '/start':
                 send_telegram("""🚀 QUANTUM BETTING BOT v10 PRO
 
 ⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update
-⚠️ АВТОМАТИЧЕСКИЙ ЗАПУСК ЗАБЛОКИРОВАН!
+⚠️ /stop - ОСТАНОВИТЬ ПОИСК
 
 📋 КОМАНДЫ:
 /today - Ставка из кеша
 /update - РУЧНОЙ поиск
+/stop - ОСТАНОВИТЬ поиск
 /bank - Банк
 /stats - Статистика
 /leagues - Лиги
@@ -372,12 +367,16 @@ def webhook():
 /inversion - Инверсия
 /help - Помощь""")
 
+            elif text == '/stop':
+                search_running = False
+                send_telegram("🛑 ПОИСК ОСТАНОВЛЕН!")
+
             elif text == '/update':
                 if search_running:
                     send_telegram("⚠️ Поиск уже запущен! Используйте /stop для остановки.")
                 else:
                     search_running = True
-                    send_telegram("🔄 Поиск матчей...")
+                    send_telegram("🔄 Поиск матчей... (для остановки нажмите /stop)")
                     
                     try:
                         matches = get_matches_with_factors(FOOTBALL_API_KEY)
@@ -398,10 +397,6 @@ def webhook():
                     finally:
                         search_running = False
                         send_telegram("✅ ПОИСК ЗАВЕРШЁН! Проверено все лиги.")
-
-            elif text == '/stop':
-                search_running = False
-                send_telegram("🛑 ПОИСК ОСТАНОВЛЕН!")
 
             elif text == '/today':
                 cache = load_cache()
@@ -456,6 +451,7 @@ def webhook():
                 send_telegram("""📖 КОМАНДЫ:
 /today - Ставка
 /update - Поиск
+/stop - ОСТАНОВИТЬ поиск
 /bank - Банк
 /stats - Статистика
 /leagues - Лиги
@@ -488,7 +484,7 @@ if __name__ == "__main__":
     logger.info(f"📊 Загружено лиг: {len(LEAGUES)}")
     logger.info("=" * 50)
     logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
-    logger.info("⚠️ АВТОМАТИЧЕСКИЙ ЗАПУСК ЗАБЛОКИРОВАН!")
+    logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
     logger.info("📌 Порог EV: 5%")
     logger.info("=" * 50)
     app.run(host='0.0.0.0', port=port)
