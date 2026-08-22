@@ -15,14 +15,18 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# ===== КОНФИГ =====
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN', "8757780924:AAEteceqwZmFDCpWJUZBj-gwc1DGCl-dv74")
 FOOTBALL_API_KEY = os.getenv('FOOTBALL_API_KEY', "fa6a81c18feae6769a0fa3baefd9e476")
 WEATHER_API_KEY = os.getenv('WEATHER_API_KEY', "7f0cfaed346b0fe364815ab65d627af2")
 ADMIN_CHAT_ID = os.getenv('ADMIN_CHAT_ID', "228801334")
 
-# ===== ГЛОБАЛЬНЫЙ ФЛАГ ДЛЯ КОНТРОЛЯ ПОИСКА =====
-search_running = False
+# ===== СЛАБЫЕ ЛИГИ =====
+WEAK_LEAGUES = [
+    "Аргентина", "Уругвай", "Чили", "Колумбия", "Парагвай",
+    "Египет", "ЮАР", "Кипр", "Исландия", "Финляндия",
+    "Албания", "Македония", "Грузия", "Армения", "Азербайджан",
+    "Казахстан", "Узбекистан", "Беларусь"
+]
 
 # ===== ЛОГИ =====
 def setup_logging():
@@ -42,8 +46,7 @@ def setup_logging():
 
 logger = setup_logging()
 logger.info("🚀 БОТ ЗАПУЩЕН!")
-logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
-logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
+logger.info("⚠️ НИКАКИХ ФОНОВЫХ ПРОЦЕССОВ НЕТ!")
 
 # ===== НАСТРОЙКИ =====
 SETTINGS = {
@@ -136,7 +139,6 @@ def save_divergence(data):
     with open(DIVERGENCE_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-# ===== ОТПРАВКА =====
 def send_telegram(text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -211,11 +213,16 @@ def send_bet_notification(bet):
     last_notified_bets[key] = bet['ev']
 
     match_time = bet.get("match_time", "⏰ Время не указано")
+    league = bet.get("league", "Неизвестная лига")
+    
+    # ===== ПРОВЕРКА НА СЛАБУЮ ЛИГУ =====
+    is_weak = any(weak in league for weak in WEAK_LEAGUES)
+    weak_tag = " ⚠️ СЛАБАЯ ЛИГА!" if is_weak else ""
 
     msg = f"""🔥 <b>ВАЛУЙНАЯ СТАВКА!</b>
 
 🏟️ {bet['home']} vs {bet['away']}
-🏆 {bet['league']}
+🏆 {league}{weak_tag}
 ⏰ {match_time}
 
 🎯 <b>{bet['bet']}</b>
@@ -257,6 +264,14 @@ def send_bet_notification(bet):
         for r in reasons:
             msg += f"\n• {r}"
 
+    # ===== ПОДСКАЗКА ДЛЯ СЛАБЫХ ЛИГ =====
+    if is_weak and "ОЗ - ДА" in bet.get('bet', ''):
+        msg += """
+
+⚠️ <b>ИНВЕРСИЯ ДЛЯ СЛАБЫХ ЛИГ!</b>
+В слабых лигах бот часто ошибается на ОЗ - ДА.
+Рекомендуем ставить ПРОТИВ (ОЗ - НЕТ)."""
+
     bet_id = f"{bet['fixture_id']}_{bet['bet_type']}_{int(time.time())}"
     send_telegram_with_buttons(msg, bet_id)
 
@@ -274,8 +289,6 @@ def send_bet_notification(bet):
 # ===== ВЕБХУК =====
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global search_running
-    
     try:
         data = request.get_json()
         
@@ -342,13 +355,12 @@ def webhook():
             if text == '/start':
                 send_telegram("""🚀 QUANTUM BETTING BOT v10 PRO
 
-⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update
-⚠️ /stop - ОСТАНОВИТЬ ПОИСК
+⚠️ БОТ НИЧЕГО НЕ ИЩЕТ АВТОМАТИЧЕСКИ!
+⚠️ ТОЛЬКО ПО КОМАНДЕ /update
 
 📋 КОМАНДЫ:
 /today - Ставка из кеша
 /update - РУЧНОЙ поиск
-/stop - ОСТАНОВИТЬ поиск
 /bank - Банк
 /stats - Статистика
 /leagues - Лиги
@@ -356,31 +368,20 @@ def webhook():
 /inversion - Инверсия
 /help - Помощь""")
 
-            elif text == '/stop':
-                search_running = False
-                send_telegram("🛑 ПОИСК ОСТАНОВЛЕН!")
-
             elif text == '/update':
-                if search_running:
-                    send_telegram("⚠️ Поиск уже запущен! Используйте /stop для остановки.")
-                else:
-                    search_running = True
-                    send_telegram("🔄 РУЧНОЙ поиск матчей... (для остановки нажмите /stop)")
-                    
-                    matches = get_matches_with_factors(FOOTBALL_API_KEY)
+                send_telegram("🔄 РУЧНОЙ поиск матчей...")
+                matches = get_matches_with_factors(FOOTBALL_API_KEY)
 
-                    if matches:
-                        bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
-                        save_cache({"best_bet": bet})
-                        if bet:
-                            send_bet_notification(bet)
-                            send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
-                        else:
-                            send_telegram("❌ Валуйных ставок с EV > 5% не найдено")
+                if matches:
+                    bet = find_best_bet(matches, FOOTBALL_API_KEY, load_bank, send_bet_notification)
+                    save_cache({"best_bet": bet})
+                    if bet:
+                        send_bet_notification(bet)
+                        send_telegram(f"✅ Найдена ставка! EV: {bet['ev']}%")
                     else:
-                        send_telegram("⚠️ Матчей не найдено сегодня")
-                    
-                    search_running = False
+                        send_telegram("❌ Валуйных ставок с EV > 5% не найдено")
+                else:
+                    send_telegram("⚠️ Матчей не найдено сегодня")
 
             elif text == '/today':
                 cache = load_cache()
@@ -412,11 +413,13 @@ def webhook():
                 msg = "📊 ЛИГИ\n\n"
                 count = 0
                 for league_id, name in LEAGUE_NAMES.items():
-                    msg += f"• {name} (ID: {league_id})\n"
+                    is_weak = " ⚠️" if any(weak in name for weak in WEAK_LEAGUES) else ""
+                    msg += f"• {name}{is_weak} (ID: {league_id})\n"
                     count += 1
                     if count >= 30:
                         break
                 msg += f"\n...и ещё {len(LEAGUE_NAMES) - 30} лиг"
+                msg += "\n\n⚠️ — слабая лига (часто 0:0)"
                 send_telegram(msg)
 
             elif text == '/mode':
@@ -433,7 +436,6 @@ def webhook():
                 send_telegram("""📖 КОМАНДЫ:
 /today - Ставка
 /update - Поиск
-/stop - ОСТАНОВИТЬ поиск
 /bank - Банк
 /stats - Статистика
 /leagues - Лиги
@@ -466,7 +468,7 @@ if __name__ == "__main__":
     logger.info(f"📊 Загружено лиг: {len(LEAGUES)}")
     logger.info("=" * 50)
     logger.info("⚠️ ПОИСК ТОЛЬКО ПО КОМАНДЕ /update")
-    logger.info("⚠️ /stop - ОСТАНОВИТЬ ПОИСК")
     logger.info("📌 Порог EV: 5%")
+    logger.info("📌 Слабые лиги: Аргентина, Уругвай, Парагвай...")
     logger.info("=" * 50)
     app.run(host='0.0.0.0', port=port)
